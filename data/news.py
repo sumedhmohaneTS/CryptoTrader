@@ -115,18 +115,25 @@ class NewsService:
             return {}
 
     def _api_call(self, currencies: str) -> dict | None:
-        """Fetch news from CryptoPanic API."""
+        """Fetch news from CryptoPanic API with retry for flaky connections."""
         url = f"{self.BASE_URL}?auth_token={self.api_key}&currencies={currencies}&public=true&kind=news&regions=en"
 
-        try:
-            response = requests.get(url, timeout=10, verify=False)
-            if response.status_code == 200:
-                return response.json()
-            logger.warning(f"CryptoPanic returned {response.status_code}")
-            return None
-        except Exception as e:
-            logger.warning(f"CryptoPanic request failed: {type(e).__name__}")
-            return None
+        for attempt in range(3):
+            try:
+                response = requests.get(url, timeout=10, verify=False)
+                if response.status_code == 200:
+                    return response.json()
+                logger.warning(f"CryptoPanic returned {response.status_code}")
+                return None
+            except requests.exceptions.ConnectionError:
+                if attempt < 2:
+                    time.sleep(1)
+                    continue
+                logger.warning("CryptoPanic connection failed after 3 attempts")
+                return None
+            except Exception as e:
+                logger.warning(f"CryptoPanic request failed: {type(e).__name__}")
+                return None
 
     def _score_text(self, text: str) -> float:
         """Score a headline/description using keyword sentiment analysis."""
