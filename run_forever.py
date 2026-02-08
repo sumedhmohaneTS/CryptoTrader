@@ -67,7 +67,7 @@ def main():
             log("Starting CryptoTrader bot...")
             try:
                 proc = subprocess.run(
-                    [sys.executable, "main.py", "--mode", "paper"],
+                    [sys.executable, "main.py", "--mode", "live", "--no-confirm"],
                     cwd=BOT_DIR,
                 )
                 exit_code = proc.returncode

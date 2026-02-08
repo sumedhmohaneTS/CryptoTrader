@@ -27,6 +27,11 @@ def parse_args():
         default=None,
         help="Comma-separated trading pairs (e.g. BTC/USDT,ETH/USDT)",
     )
+    parser.add_argument(
+        "--no-confirm",
+        action="store_true",
+        help="Skip live mode confirmation (for watchdog/automated starts)",
+    )
     return parser.parse_args()
 
 
@@ -73,7 +78,7 @@ def main():
     if args.pairs:
         pairs = [p.strip() for p in args.pairs.split(",")]
 
-    if args.mode == "live":
+    if args.mode == "live" and not args.no_confirm:
         logger.warning("=" * 60)
         logger.warning("  LIVE TRADING MODE - REAL MONEY AT RISK")
         logger.warning("  Make sure your .env file has valid API keys")

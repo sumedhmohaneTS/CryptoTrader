@@ -149,6 +149,14 @@
         </div>
     </div>
 
+    <!-- Performance Tracker -->
+    <div class="card mb-3">
+        <div class="card-header"><i class="bi bi-bar-chart-line"></i> Performance Tracker</div>
+        <div class="card-body" id="performance-body">
+            <div class="text-muted text-center">Waiting for closed trades...</div>
+        </div>
+    </div>
+
     <!-- Trade History + Strategy Log -->
     <div class="row g-3 mb-3">
         <div class="col-lg-7">
@@ -429,6 +437,133 @@ async function loadRisk() {
     }
 }
 
+async function loadPerformance() {
+    const d = await api('/api/performance');
+    const el = $('performance-body');
+    if (!d || d.total_trades === 0) {
+        el.innerHTML = '<div class="text-muted text-center">Waiting for closed trades to calculate performance...</div>';
+        return;
+    }
+
+    const wr = (d.win_rate * 100).toFixed(1);
+    const wrColor = d.win_rate >= 0.55 ? 'text-profit' : d.win_rate >= 0.45 ? 'text-warning' : 'text-loss';
+    const pfColor = d.profit_factor >= 1.5 ? 'text-profit' : d.profit_factor >= 1.0 ? 'text-warning' : 'text-loss';
+    const expColor = d.expectancy >= 0 ? 'text-profit' : 'text-loss';
+    const pnlColor = d.total_pnl >= 0 ? 'text-profit' : 'text-loss';
+
+    // Strategy breakdown
+    let strategyHtml = '';
+    for (const [name, s] of Object.entries(d.by_strategy || {})) {
+        const sWr = (s.win_rate * 100).toFixed(0);
+        const sColor = s.total_pnl >= 0 ? 'text-profit' : 'text-loss';
+        strategyHtml += `<tr>
+            <td><span class="badge bg-info">${name}</span></td>
+            <td>${s.total}</td><td>${s.wins}</td><td>${s.losses}</td>
+            <td>${sWr}%</td><td class="${sColor}">${pnlSign(s.total_pnl)}${usd(s.total_pnl)}</td>
+        </tr>`;
+    }
+
+    // Symbol breakdown
+    let symbolHtml = '';
+    for (const [sym, s] of Object.entries(d.by_symbol || {})) {
+        const sWr = (s.win_rate * 100).toFixed(0);
+        const sColor = s.total_pnl >= 0 ? 'text-profit' : 'text-loss';
+        symbolHtml += `<tr>
+            <td><strong>${sym}</strong></td>
+            <td>${s.total}</td><td>${s.wins}</td><td>${s.losses}</td>
+            <td>${sWr}%</td><td class="${sColor}">${pnlSign(s.total_pnl)}${usd(s.total_pnl)}</td>
+        </tr>`;
+    }
+
+    // Recent trades
+    let recentHtml = '';
+    for (const t of (d.recent_trades || [])) {
+        const pc = pnlCls(t.pnl);
+        recentHtml += `<tr>
+            <td>${fmtDateTime(t.close_timestamp)}</td>
+            <td>${t.symbol}</td>
+            <td><span class="badge ${t.side==='buy'?'badge-buy':'badge-sell'}">${t.side.toUpperCase()}</span></td>
+            <td class="${pc}">${pnlSign(t.pnl)}${usd(t.pnl)}</td>
+            <td class="${pc}">${pnlSign(t.pnl_pct)}${pct(t.pnl_pct)}</td>
+            <td><span class="badge ${t.close_reason==='take_profit'?'bg-success':'bg-danger'}">${t.close_reason}</span></td>
+        </tr>`;
+    }
+
+    el.innerHTML = `
+        <div class="row g-3 mb-3">
+            <div class="col-md-2 text-center">
+                <div class="kpi-label">Win Rate</div>
+                <div class="kpi-value ${wrColor}">${wr}%</div>
+                <small class="text-muted">${d.wins}W / ${d.losses}L</small>
+            </div>
+            <div class="col-md-2 text-center">
+                <div class="kpi-label">Total P&amp;L</div>
+                <div class="kpi-value ${pnlColor}">${pnlSign(d.total_pnl)}${usd(d.total_pnl)}</div>
+                <small class="text-muted">${d.total_trades} trades</small>
+            </div>
+            <div class="col-md-2 text-center">
+                <div class="kpi-label">Profit Factor</div>
+                <div class="kpi-value ${pfColor}">${d.profit_factor === Infinity ? '∞' : d.profit_factor.toFixed(2)}</div>
+                <small class="text-muted">${d.profit_factor >= 1.5 ? 'Strong' : d.profit_factor >= 1.0 ? 'Marginal' : 'Losing'}</small>
+            </div>
+            <div class="col-md-2 text-center">
+                <div class="kpi-label">Expectancy</div>
+                <div class="kpi-value ${expColor}">${pnlSign(d.expectancy)}${usd(d.expectancy)}</div>
+                <small class="text-muted">per trade</small>
+            </div>
+            <div class="col-md-2 text-center">
+                <div class="kpi-label">Avg Win</div>
+                <div class="kpi-value text-profit">${usd(d.avg_win)}</div>
+                <small class="text-muted">${pct(d.avg_win_pct)}</small>
+            </div>
+            <div class="col-md-2 text-center">
+                <div class="kpi-label">Avg Loss</div>
+                <div class="kpi-value text-loss">${usd(d.avg_loss)}</div>
+                <small class="text-muted">${pct(d.avg_loss_pct)}</small>
+            </div>
+        </div>
+        <div class="row g-3 mb-2">
+            <div class="col-md-3 text-center">
+                <small class="text-muted">Best Trade</small>
+                <div class="text-profit">${pnlSign(d.best_trade)}${usd(d.best_trade)}</div>
+            </div>
+            <div class="col-md-3 text-center">
+                <small class="text-muted">Worst Trade</small>
+                <div class="text-loss">${usd(d.worst_trade)}</div>
+            </div>
+            <div class="col-md-3 text-center">
+                <small class="text-muted">Max Win Streak</small>
+                <div class="text-profit">${d.max_consecutive_wins}</div>
+            </div>
+            <div class="col-md-3 text-center">
+                <small class="text-muted">Max Loss Streak</small>
+                <div class="text-loss">${d.max_consecutive_losses}</div>
+            </div>
+        </div>
+        <div class="row g-3">
+            <div class="col-md-4">
+                <h6 class="mb-2">By Strategy</h6>
+                <table class="table table-sm table-hover"><thead>
+                    <tr><th>Strategy</th><th>Total</th><th>W</th><th>L</th><th>Win%</th><th>P&L</th></tr>
+                </thead><tbody>${strategyHtml || '<tr><td colspan="6" class="text-muted">--</td></tr>'}</tbody></table>
+            </div>
+            <div class="col-md-3">
+                <h6 class="mb-2">By Symbol</h6>
+                <table class="table table-sm table-hover"><thead>
+                    <tr><th>Symbol</th><th>Total</th><th>W</th><th>L</th><th>Win%</th><th>P&L</th></tr>
+                </thead><tbody>${symbolHtml || '<tr><td colspan="6" class="text-muted">--</td></tr>'}</tbody></table>
+            </div>
+            <div class="col-md-5">
+                <h6 class="mb-2">Recent Trades</h6>
+                <div class="scroll-table" style="max-height:200px">
+                <table class="table table-sm table-hover"><thead>
+                    <tr><th>Closed</th><th>Symbol</th><th>Side</th><th>P&L</th><th>P&L%</th><th>Exit</th></tr>
+                </thead><tbody>${recentHtml || '<tr><td colspan="6" class="text-muted">--</td></tr>'}</tbody></table>
+                </div>
+            </div>
+        </div>`;
+}
+
 // Bot control
 async function startBot() {
     $('btn-start').disabled = true;
@@ -458,6 +593,7 @@ async function refreshAll() {
     await Promise.all([
         loadStatus(), loadPortfolio(), loadPositions(),
         loadRisk(), loadTrades(), loadStrategyLog(), loadEquity(),
+        loadPerformance(),
     ]);
     $('last-updated').textContent = 'Updated ' + new Date().toLocaleTimeString();
 }

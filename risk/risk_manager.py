@@ -62,8 +62,12 @@ class RiskManager:
         if signal.signal == Signal.HOLD:
             return 0.0
 
-        # Max allocation per trade
-        max_allocation = portfolio_value * settings.MAX_POSITION_PCT
+        # Max margin to allocate per trade
+        max_margin = portfolio_value * settings.MAX_POSITION_PCT
+
+        # With leverage, our notional position is larger
+        leverage = getattr(settings, "LEVERAGE", 1)
+        max_notional = max_margin * leverage
 
         # ATR-based sizing: higher ATR → smaller position
         risk_per_unit = abs(current_price - signal.stop_loss)
@@ -71,17 +75,15 @@ class RiskManager:
             logger.warning("Invalid stop-loss, skipping position")
             return 0.0
 
-        # Risk-based position size: risk no more than MAX_POSITION_PCT of portfolio
-        position_value = max_allocation
-        quantity = position_value / current_price
+        # Quantity from notional value
+        quantity = max_notional / current_price
 
-        # Ensure the loss at stop-loss doesn't exceed our risk budget
-        max_loss = max_allocation
-        risk_quantity = max_loss / risk_per_unit
+        # Ensure the loss at stop-loss doesn't exceed our margin
+        risk_quantity = max_margin / risk_per_unit
         quantity = min(quantity, risk_quantity)
 
-        # Don't allocate more than available
-        quantity = min(quantity, max_allocation / current_price)
+        # Cap to max notional
+        quantity = min(quantity, max_notional / current_price)
 
         if quantity * current_price < 5:  # Binance min notional ~$5
             logger.info("Position too small, skipping")

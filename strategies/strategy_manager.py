@@ -1,6 +1,7 @@
 import pandas as pd
 
 from analysis.market_analyzer import MarketAnalyzer, MarketRegime
+from analysis.indicators import get_higher_tf_trend
 from strategies.base import TradeSignal, Signal
 from strategies.momentum import MomentumStrategy
 from strategies.mean_reversion import MeanReversionStrategy
@@ -20,11 +21,35 @@ class StrategyManager:
             MarketRegime.VOLATILE: BreakoutStrategy(),
         }
 
-    def get_signal(self, df: pd.DataFrame, symbol: str) -> tuple[TradeSignal, MarketRegime]:
+    def get_signal(
+        self,
+        df: pd.DataFrame,
+        symbol: str,
+        higher_tf_data: dict[str, pd.DataFrame] | None = None,
+        funding_rate: float | None = None,
+        ob_imbalance: float = 0.0,
+        news_score: float = 0.0,
+    ) -> tuple[TradeSignal, MarketRegime]:
         regime = self.analyzer.classify(df)
         strategy = self.strategies[regime]
 
         signal = strategy.analyze(df, symbol)
+
+        # Apply multi-timeframe filter
+        if signal.signal != Signal.HOLD and higher_tf_data:
+            signal = self._apply_mtf_filter(signal, higher_tf_data)
+
+        # Apply funding rate filter
+        if signal.signal != Signal.HOLD and funding_rate is not None:
+            signal = self._apply_funding_filter(signal, funding_rate)
+
+        # Apply order book imbalance
+        if signal.signal != Signal.HOLD and abs(ob_imbalance) > 0.05:
+            signal = self._apply_ob_filter(signal, ob_imbalance)
+
+        # Apply news sentiment
+        if signal.signal != Signal.HOLD and abs(news_score) > 0.1:
+            signal = self._apply_news_filter(signal, news_score)
 
         logger.info(
             f"{symbol} | Regime: {regime.value} | Strategy: {strategy.name} | "
@@ -33,6 +58,167 @@ class StrategyManager:
         )
 
         return signal, regime
+
+    def _apply_mtf_filter(
+        self, signal: TradeSignal, higher_tf_data: dict[str, pd.DataFrame]
+    ) -> TradeSignal:
+        """Filter signals against higher timeframe trends."""
+        htf_trends = {}
+        for tf, df in higher_tf_data.items():
+            if tf == settings.PRIMARY_TIMEFRAME:
+                continue
+            trend = get_higher_tf_trend(df)
+            htf_trends[tf] = trend
+
+        if not htf_trends:
+            return signal
+
+        # Check alignment
+        aligned = 0
+        opposed = 0
+        for tf, trend in htf_trends.items():
+            if signal.signal == Signal.BUY and trend == "bullish":
+                aligned += 1
+            elif signal.signal == Signal.SELL and trend == "bearish":
+                aligned += 1
+            elif signal.signal == Signal.BUY and trend == "bearish":
+                opposed += 1
+            elif signal.signal == Signal.SELL and trend == "bullish":
+                opposed += 1
+
+        reason = signal.reason
+
+        if opposed > 0 and aligned == 0:
+            # Trading against all higher TFs — kill the signal
+            logger.info(
+                f"MTF FILTER: {signal.signal.value} blocked — against "
+                f"higher TF trends: {htf_trends}"
+            )
+            return TradeSignal(
+                signal=Signal.HOLD, confidence=0.0, strategy=signal.strategy,
+                symbol=signal.symbol, entry_price=signal.entry_price,
+                stop_loss=0, take_profit=0,
+                reason=f"Blocked by higher TF ({htf_trends})",
+            )
+
+        if aligned > 0:
+            # Boost confidence for aligned signals
+            boost = 0.10 * aligned
+            new_conf = min(1.0, signal.confidence + boost)
+            reason += f"; MTF aligned ({aligned} TFs)"
+            logger.info(f"MTF FILTER: +{boost:.2f} confidence ({aligned} aligned)")
+            return TradeSignal(
+                signal=signal.signal, confidence=new_conf, strategy=signal.strategy,
+                symbol=signal.symbol, entry_price=signal.entry_price,
+                stop_loss=signal.stop_loss, take_profit=signal.take_profit,
+                reason=reason,
+            )
+
+        return signal
+
+    def _apply_funding_filter(self, signal: TradeSignal, funding_rate: float) -> TradeSignal:
+        """
+        Funding rate filter for futures:
+        - High positive funding (>0.05%) = longs are overcrowded, risky to go long
+        - High negative funding (<-0.05%) = shorts are overcrowded, risky to go short
+        """
+        reason = signal.reason
+        adjustment = 0.0
+
+        if signal.signal == Signal.BUY:
+            if funding_rate > 0.001:  # >0.1% — very high, longs pay a lot
+                adjustment = -0.15
+                reason += f"; Funding rate high ({funding_rate:.4f}), risky long"
+            elif funding_rate < -0.0005:  # Negative = shorts paying, good for longs
+                adjustment = +0.08
+                reason += f"; Funding favors longs ({funding_rate:.4f})"
+        elif signal.signal == Signal.SELL:
+            if funding_rate < -0.001:  # Very negative, shorts overcrowded
+                adjustment = -0.15
+                reason += f"; Funding rate low ({funding_rate:.4f}), risky short"
+            elif funding_rate > 0.0005:  # Positive = longs paying, good for shorts
+                adjustment = +0.08
+                reason += f"; Funding favors shorts ({funding_rate:.4f})"
+
+        if adjustment != 0:
+            new_conf = max(0.0, min(1.0, signal.confidence + adjustment))
+            logger.info(f"FUNDING FILTER: {adjustment:+.2f} confidence (rate={funding_rate:.4f})")
+            return TradeSignal(
+                signal=signal.signal, confidence=new_conf, strategy=signal.strategy,
+                symbol=signal.symbol, entry_price=signal.entry_price,
+                stop_loss=signal.stop_loss, take_profit=signal.take_profit,
+                reason=reason,
+            )
+        return signal
+
+    def _apply_ob_filter(self, signal: TradeSignal, imbalance: float) -> TradeSignal:
+        """
+        Order book imbalance filter:
+        - Positive imbalance = more bids (buyers) — supports BUY
+        - Negative imbalance = more asks (sellers) — supports SELL
+        """
+        reason = signal.reason
+        adjustment = 0.0
+
+        if signal.signal == Signal.BUY and imbalance > 0.15:
+            adjustment = +0.08
+            reason += f"; Order book bullish ({imbalance:+.2f})"
+        elif signal.signal == Signal.BUY and imbalance < -0.15:
+            adjustment = -0.10
+            reason += f"; Order book bearish ({imbalance:+.2f})"
+        elif signal.signal == Signal.SELL and imbalance < -0.15:
+            adjustment = +0.08
+            reason += f"; Order book bearish ({imbalance:+.2f})"
+        elif signal.signal == Signal.SELL and imbalance > 0.15:
+            adjustment = -0.10
+            reason += f"; Order book bullish ({imbalance:+.2f})"
+
+        if adjustment != 0:
+            new_conf = max(0.0, min(1.0, signal.confidence + adjustment))
+            logger.info(f"OB FILTER: {adjustment:+.2f} confidence (imbalance={imbalance:+.2f})")
+            return TradeSignal(
+                signal=signal.signal, confidence=new_conf, strategy=signal.strategy,
+                symbol=signal.symbol, entry_price=signal.entry_price,
+                stop_loss=signal.stop_loss, take_profit=signal.take_profit,
+                reason=reason,
+            )
+        return signal
+
+    def _apply_news_filter(self, signal: TradeSignal, news_score: float) -> TradeSignal:
+        """
+        News sentiment filter:
+        - Score > 0 = bullish news — supports BUY
+        - Score < 0 = bearish news — supports SELL
+        """
+        reason = signal.reason
+        weight = settings.NEWS_SENTIMENT_WEIGHT
+        adjustment = 0.0
+
+        if signal.signal == Signal.BUY:
+            if news_score > 0.3:
+                adjustment = weight
+                reason += f"; News bullish ({news_score:+.2f})"
+            elif news_score < -0.3:
+                adjustment = -weight
+                reason += f"; News bearish ({news_score:+.2f})"
+        elif signal.signal == Signal.SELL:
+            if news_score < -0.3:
+                adjustment = weight
+                reason += f"; News bearish ({news_score:+.2f})"
+            elif news_score > 0.3:
+                adjustment = -weight
+                reason += f"; News bullish ({news_score:+.2f})"
+
+        if adjustment != 0:
+            new_conf = max(0.0, min(1.0, signal.confidence + adjustment))
+            logger.info(f"NEWS FILTER: {adjustment:+.2f} confidence (score={news_score:+.2f})")
+            return TradeSignal(
+                signal=signal.signal, confidence=new_conf, strategy=signal.strategy,
+                symbol=signal.symbol, entry_price=signal.entry_price,
+                stop_loss=signal.stop_loss, take_profit=signal.take_profit,
+                reason=reason,
+            )
+        return signal
 
     def get_all_signals(
         self, df: pd.DataFrame, symbol: str

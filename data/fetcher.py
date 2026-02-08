@@ -13,7 +13,7 @@ class DataFetcher:
                 "apiKey": api_key,
                 "secret": api_secret,
                 "enableRateLimit": True,
-                "options": {"defaultType": "spot"},
+                "options": {"defaultType": settings.TRADING_TYPE},
             }
         )
 
@@ -58,3 +58,32 @@ class DataFetcher:
         except Exception as e:
             logger.error(f"Failed to fetch order book for {symbol}: {e}")
             return {}
+
+    def fetch_order_book_imbalance(self, symbol: str, depth: int = 10) -> float:
+        """
+        Calculate order book imbalance: ratio of bid vs ask volume.
+        Returns -1 to +1: positive = more buyers, negative = more sellers.
+        """
+        try:
+            ob = self.exchange.fetch_order_book(symbol, depth)
+            bid_vol = sum(bid[1] for bid in ob.get("bids", [])[:depth])
+            ask_vol = sum(ask[1] for ask in ob.get("asks", [])[:depth])
+            total = bid_vol + ask_vol
+            if total == 0:
+                return 0.0
+            return (bid_vol - ask_vol) / total
+        except Exception as e:
+            logger.error(f"Failed to fetch order book imbalance for {symbol}: {e}")
+            return 0.0
+
+    def fetch_funding_rate(self, symbol: str) -> float | None:
+        """Fetch current funding rate for a futures symbol. Positive = longs pay shorts."""
+        try:
+            result = self.exchange.fetch_funding_rate(symbol)
+            rate = result.get("fundingRate")
+            if rate is not None:
+                return float(rate)
+            return None
+        except Exception as e:
+            logger.error(f"Failed to fetch funding rate for {symbol}: {e}")
+            return None

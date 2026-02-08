@@ -7,35 +7,43 @@ load_dotenv()
 BINANCE_API_KEY = os.getenv("BINANCE_API_KEY", "")
 BINANCE_API_SECRET = os.getenv("BINANCE_API_SECRET", "")
 
-# Trading pairs
-DEFAULT_PAIRS = ["BTC/USDT", "ETH/USDT", "SOL/USDT", "XRP/USDT", "DOGE/USDT"]
+# News / Sentiment
+CRYPTOPANIC_API_KEY = os.getenv("CRYPTOPANIC_API_KEY", "")
+
+# Futures config
+TRADING_TYPE = "future"          # "spot" or "future"
+LEVERAGE = 5                     # 5x leverage for futures
+MARGIN_TYPE = "ISOLATED"         # ISOLATED or CROSSED
+
+# Trading pairs (USDT-M futures contracts)
+DEFAULT_PAIRS = ["XRP/USDT", "DOGE/USDT", "SOL/USDT"]
 
 # Timeframes
-TIMEFRAMES = ["5m", "15m", "1h", "4h"]
+TIMEFRAMES = ["15m", "1h", "4h"]
 PRIMARY_TIMEFRAME = "15m"
 
 # Bot loop
 BOT_LOOP_INTERVAL_SECONDS = 60
 
 # Risk management
-MAX_POSITION_PCT = 0.05          # 5% of portfolio per trade
+MAX_POSITION_PCT = 0.25          # 25% of portfolio per trade (safer sizing)
 STOP_LOSS_ATR_MULTIPLIER = 1.5   # Stop-loss at 1.5x ATR below entry
 REWARD_RISK_RATIO = 2.0          # Take-profit at 2:1 R:R minimum
-DAILY_LOSS_LIMIT_PCT = 0.10      # Stop trading if down 10% in a day
-MAX_DRAWDOWN_PCT = 0.30          # Circuit breaker at 30% drawdown from peak
-MAX_OPEN_POSITIONS = 3           # Max concurrent positions
+DAILY_LOSS_LIMIT_PCT = 0.15      # Stop trading if down 15% in a day
+MAX_DRAWDOWN_PCT = 0.25          # Circuit breaker at 25% drawdown from peak
+MAX_OPEN_POSITIONS = 2           # Allow 2 positions (diversify)
 
-# Strategy parameters
-EMA_FAST = 9
-EMA_SLOW = 21
-EMA_TREND = 50
-RSI_PERIOD = 14
-RSI_OVERSOLD = 30
-RSI_OVERBOUGHT = 70
-MACD_FAST = 12
-MACD_SLOW = 26
-MACD_SIGNAL = 9
-BB_PERIOD = 20
+# Strategy parameters — optimized for 15m timeframe
+EMA_FAST = 5
+EMA_SLOW = 13
+EMA_TREND = 21
+RSI_PERIOD = 8
+RSI_OVERSOLD = 25
+RSI_OVERBOUGHT = 75
+MACD_FAST = 5
+MACD_SLOW = 13
+MACD_SIGNAL = 5
+BB_PERIOD = 10
 BB_STD = 2.0
 ATR_PERIOD = 14
 VOLUME_SMA_PERIOD = 20
@@ -47,10 +55,14 @@ ADX_RANGING_THRESHOLD = 20
 ATR_VOLATILE_MULTIPLIER = 1.5   # ATR > 1.5x its own SMA = volatile
 
 # Minimum confidence to act on a signal
-MIN_SIGNAL_CONFIDENCE = 0.6
+MIN_SIGNAL_CONFIDENCE = 0.70
+
+# News sentiment
+NEWS_CACHE_HOURS = 8            # Cache news for 8 hours (100 req/month limit)
+NEWS_SENTIMENT_WEIGHT = 0.15    # How much news affects signal confidence
 
 # Paper trading
-PAPER_INITIAL_BALANCE = 100.0    # Starting balance in USDT
+PAPER_INITIAL_BALANCE = 8.90    # Starting balance in USDT
 
 # Database
 DB_PATH = "data/trades.db"

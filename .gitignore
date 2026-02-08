@@ -10,3 +10,5 @@ data/bot.stop
 screenshot*.png
 take_screenshot.ps1
 scroll_screenshot.ps1
+crypto-panic.txt
+apikey.txt

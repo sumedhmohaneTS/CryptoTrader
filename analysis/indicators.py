@@ -56,7 +56,117 @@ def add_adx(df: pd.DataFrame) -> pd.DataFrame:
 
 def add_volume_sma(df: pd.DataFrame) -> pd.DataFrame:
     df["volume_sma"] = df["volume"].rolling(window=settings.VOLUME_SMA_PERIOD).mean()
+    df["volume_ratio"] = df["volume"] / df["volume_sma"]
     return df
+
+
+def add_obv(df: pd.DataFrame) -> pd.DataFrame:
+    """On-Balance Volume — tracks cumulative volume flow."""
+    direction = np.where(df["close"] > df["close"].shift(1), 1,
+                np.where(df["close"] < df["close"].shift(1), -1, 0))
+    df["obv"] = (df["volume"] * direction).cumsum()
+    df["obv_ema"] = EMAIndicator(df["obv"].fillna(0), window=13).ema_indicator()
+    return df
+
+
+def detect_rsi_divergence(df: pd.DataFrame, lookback: int = 20) -> str:
+    """
+    Detect RSI divergence with price.
+    Returns: "bullish", "bearish", or "none"
+    """
+    if len(df) < lookback or "rsi" not in df.columns:
+        return "none"
+
+    recent = df.tail(lookback)
+    close = recent["close"].values
+    rsi = recent["rsi"].values
+
+    # Find recent swing lows/highs (last two)
+    lows_idx = []
+    highs_idx = []
+    for i in range(2, len(recent) - 2):
+        if close[i] < close[i - 1] and close[i] < close[i - 2] and close[i] < close[i + 1] and close[i] < close[i + 2]:
+            lows_idx.append(i)
+        if close[i] > close[i - 1] and close[i] > close[i - 2] and close[i] > close[i + 1] and close[i] > close[i + 2]:
+            highs_idx.append(i)
+
+    # Bullish divergence: price makes lower low but RSI makes higher low
+    if len(lows_idx) >= 2:
+        i1, i2 = lows_idx[-2], lows_idx[-1]
+        if close[i2] < close[i1] and rsi[i2] > rsi[i1]:
+            return "bullish"
+
+    # Bearish divergence: price makes higher high but RSI makes lower high
+    if len(highs_idx) >= 2:
+        i1, i2 = highs_idx[-2], highs_idx[-1]
+        if close[i2] > close[i1] and rsi[i2] < rsi[i1]:
+            return "bearish"
+
+    return "none"
+
+
+def detect_macd_divergence(df: pd.DataFrame, lookback: int = 20) -> str:
+    """
+    Detect MACD histogram divergence with price.
+    Returns: "bullish", "bearish", or "none"
+    """
+    hist_col = f"MACDh_{settings.MACD_FAST}_{settings.MACD_SLOW}_{settings.MACD_SIGNAL}"
+    if len(df) < lookback or hist_col not in df.columns:
+        return "none"
+
+    recent = df.tail(lookback)
+    close = recent["close"].values
+    hist = recent[hist_col].values
+
+    lows_idx = []
+    highs_idx = []
+    for i in range(2, len(recent) - 2):
+        if close[i] < close[i - 1] and close[i] < close[i + 1]:
+            lows_idx.append(i)
+        if close[i] > close[i - 1] and close[i] > close[i + 1]:
+            highs_idx.append(i)
+
+    # Bullish: price lower low, MACD histogram higher low
+    if len(lows_idx) >= 2:
+        i1, i2 = lows_idx[-2], lows_idx[-1]
+        if close[i2] < close[i1] and hist[i2] > hist[i1]:
+            return "bullish"
+
+    # Bearish: price higher high, MACD histogram lower high
+    if len(highs_idx) >= 2:
+        i1, i2 = highs_idx[-2], highs_idx[-1]
+        if close[i2] > close[i1] and hist[i2] < hist[i1]:
+            return "bearish"
+
+    return "none"
+
+
+def get_higher_tf_trend(df: pd.DataFrame) -> str:
+    """
+    Determine trend from a higher timeframe DataFrame.
+    Returns: "bullish", "bearish", or "neutral"
+    """
+    if df.empty or len(df) < 21:
+        return "neutral"
+
+    df = add_ema(df)
+    df = add_adx(df)
+
+    last = df.iloc[-1]
+    ema_fast = last.get(f"ema_{settings.EMA_FAST}", 0)
+    ema_slow = last.get(f"ema_{settings.EMA_SLOW}", 0)
+    ema_trend = last.get(f"ema_{settings.EMA_TREND}", 0)
+    adx = last.get(f"ADX_{settings.ADX_PERIOD}", 0)
+    close = last["close"]
+
+    if adx < 15:
+        return "neutral"
+
+    if close > ema_trend and ema_fast > ema_slow:
+        return "bullish"
+    elif close < ema_trend and ema_fast < ema_slow:
+        return "bearish"
+    return "neutral"
 
 
 def find_support_resistance(
@@ -109,4 +219,5 @@ def add_all_indicators(df: pd.DataFrame) -> pd.DataFrame:
     df = add_atr(df)
     df = add_adx(df)
     df = add_volume_sma(df)
+    df = add_obv(df)
     return df

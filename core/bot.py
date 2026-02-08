@@ -6,6 +6,7 @@ from core.exchange import Exchange
 from core.portfolio import Portfolio, Position
 from data.database import Database
 from data.fetcher import DataFetcher
+from data.news import NewsService
 from risk.risk_manager import RiskManager
 from strategies.base import Signal
 from strategies.strategy_manager import StrategyManager
@@ -29,20 +30,32 @@ class TradingBot:
         )
         self.strategy_manager = StrategyManager()
         self.risk_manager = RiskManager()
+        self.news_service = NewsService()
         self.db = Database()
 
     async def start(self):
         await self.db.connect()
 
-        initial_balance = self.exchange.get_usdt_balance()
-        self.risk_manager.peak_portfolio_value = initial_balance
-        self.risk_manager.daily_starting_value = initial_balance
+        # Sync existing positions from exchange on startup
+        if self.mode == "live":
+            self._sync_positions_from_exchange()
+
+        free_balance = self.exchange.get_usdt_balance()
+        prices = self._get_current_prices()
+        total_value = self.portfolio.calculate_portfolio_value(free_balance, prices)
+        # Set initial_balance to total portfolio value so P&L is relative to start
+        self.portfolio.initial_balance = total_value
+        self.risk_manager.peak_portfolio_value = total_value
+        self.risk_manager.daily_starting_value = total_value
 
         logger.info("=" * 60)
         logger.info(f"CryptoTrader Bot Starting")
         logger.info(f"Mode: {self.mode.upper()}")
         logger.info(f"Pairs: {', '.join(self.pairs)}")
-        logger.info(f"Initial Balance: ${initial_balance:.2f}")
+        logger.info(f"Free Balance: ${free_balance:.2f}")
+        if self.portfolio.open_position_count > 0:
+            logger.info(f"Recovered {self.portfolio.open_position_count} existing position(s)")
+        logger.info(f"Total Portfolio Value: ${total_value:.2f}")
         logger.info("=" * 60)
 
         self.running = True
@@ -52,6 +65,32 @@ class TradingBot:
             logger.info("Bot cancelled")
         finally:
             await self.stop()
+
+    def _sync_positions_from_exchange(self):
+        """Recover existing futures positions from Binance on startup."""
+        positions = self.exchange.get_futures_positions()
+        for pos_data in positions:
+            # Futures symbols come as "XRP/USDT:USDT", normalize to "XRP/USDT"
+            raw_symbol = pos_data["symbol"]
+            symbol = raw_symbol.split(":")[0] if ":" in raw_symbol else raw_symbol
+            if symbol not in self.pairs:
+                continue
+            position = Position(
+                trade_id=0,  # unknown, was from a previous run
+                symbol=symbol,
+                side=pos_data["side"],
+                entry_price=pos_data["entry_price"],
+                quantity=pos_data["contracts"],
+                stop_loss=0.0,  # will be recalculated on next signal
+                take_profit=0.0,
+                strategy="recovered",
+                confidence=0.0,
+            )
+            self.portfolio.add_position(position)
+            logger.info(
+                f"Recovered position: {pos_data['side']} {pos_data['contracts']:.6f} {symbol} "
+                f"@ ${pos_data['entry_price']:.4f} | uPnL: ${pos_data['unrealized_pnl']:.4f}"
+            )
 
     async def stop(self):
         self.running = False
@@ -140,7 +179,31 @@ class TradingBot:
             if df.empty:
                 return
 
-            signal, regime = self.strategy_manager.get_signal(df, symbol)
+            # Fetch multi-timeframe data (1h, 4h)
+            higher_tf_data = {}
+            for tf in settings.TIMEFRAMES:
+                if tf != settings.PRIMARY_TIMEFRAME:
+                    htf_df = self.fetcher.fetch_ohlcv(symbol, tf, limit=100)
+                    if not htf_df.empty:
+                        higher_tf_data[tf] = htf_df
+
+            # Fetch funding rate
+            funding_rate = self.fetcher.fetch_funding_rate(symbol)
+
+            # Fetch order book imbalance
+            ob_imbalance = self.fetcher.fetch_order_book_imbalance(symbol)
+
+            # Get cached news sentiment
+            news_data = self.news_service.get_sentiment(self.pairs)
+            news_score = news_data.get(symbol, {}).get("score", 0.0)
+
+            signal, regime = self.strategy_manager.get_signal(
+                df, symbol,
+                higher_tf_data=higher_tf_data,
+                funding_rate=funding_rate,
+                ob_imbalance=ob_imbalance,
+                news_score=news_score,
+            )
 
             # Log strategy decision
             await self.db.log_strategy(
@@ -208,6 +271,19 @@ class TradingBot:
             if current_price <= 0:
                 continue
 
+            # Recovered positions (SL/TP=0) — set emergency SL/TP based on entry price
+            if position.stop_loss <= 0 or position.take_profit <= 0:
+                atr_estimate = position.entry_price * 0.015  # ~1.5% as fallback ATR
+                if position.side == "buy":
+                    position.stop_loss = position.entry_price - 2 * atr_estimate
+                    position.take_profit = position.entry_price + 3 * atr_estimate
+                else:
+                    position.stop_loss = position.entry_price + 2 * atr_estimate
+                    position.take_profit = position.entry_price - 3 * atr_estimate
+                logger.info(
+                    f"Set recovered SL/TP for {symbol}: SL=${position.stop_loss:.4f} TP=${position.take_profit:.4f}"
+                )
+
             close_reason = ""
 
             # Check stop-loss
@@ -233,13 +309,11 @@ class TradingBot:
         if not position:
             return
 
-        # Place closing order (opposite side)
-        close_side = "sell" if position.side == "buy" else "buy"
-        order = self.exchange.place_order(
+        # Close futures position
+        order = self.exchange.close_position(
             symbol=symbol,
-            side=close_side,
+            side=position.side,
             quantity=position.quantity,
-            price=close_price,
         )
 
         if order:

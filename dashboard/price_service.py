@@ -6,7 +6,7 @@ class PriceService:
     CACHE_TTL = 5  # seconds
 
     def __init__(self):
-        self.exchange = ccxt.binance({"enableRateLimit": True})
+        self.exchange = ccxt.binance({"enableRateLimit": True, "options": {"defaultType": "future"}})
         self._cache: dict[str, tuple[float, float]] = {}  # symbol -> (price, timestamp)
 
     def get_prices(self, symbols: list[str]) -> dict[str, float]:
