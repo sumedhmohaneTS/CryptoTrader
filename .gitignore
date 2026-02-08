@@ -1,0 +1,12 @@
+.env
+__pycache__/
+*.pyc
+data/trades.db
+data/trades.db-wal
+data/trades.db-shm
+data/bot.pid
+data/bot.stop
+*.log
+screenshot*.png
+take_screenshot.ps1
+scroll_screenshot.ps1

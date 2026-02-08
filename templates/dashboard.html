@@ -1,0 +1,469 @@
+<!DOCTYPE html>
+<html lang="en" data-bs-theme="dark">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>CryptoTrader Dashboard</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.0/font/bootstrap-icons.css" rel="stylesheet">
+    <style>
+        body { background: #0f0f1a; color: #e0e0e0; font-family: 'Segoe UI', system-ui, sans-serif; }
+        .card { background: #1a1a2e; border: 1px solid #2a2a4a; }
+        .card-header { background: #16213e; border-bottom: 1px solid #2a2a4a; font-weight: 600; }
+        .table { color: #e0e0e0; margin-bottom: 0; }
+        .table thead th { border-bottom: 2px solid #2a2a4a; font-size: 0.8rem; text-transform: uppercase; color: #8888aa; }
+        .table td { border-color: #1e1e3a; vertical-align: middle; }
+        .kpi-value { font-size: 1.8rem; font-weight: 700; }
+        .kpi-label { font-size: 0.8rem; color: #8888aa; text-transform: uppercase; }
+        .text-profit { color: #00e676 !important; }
+        .text-loss { color: #ff1744 !important; }
+        .badge-buy { background: #00c853; }
+        .badge-sell { background: #ff1744; }
+        .status-dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 6px; }
+        .status-dot.running { background: #00e676; animation: pulse 2s infinite; }
+        .status-dot.stopped { background: #ff1744; }
+        @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.4; } }
+        .scroll-table { max-height: 380px; overflow-y: auto; }
+        .scroll-table thead { position: sticky; top: 0; z-index: 1; }
+        .scroll-table thead th { background: #16213e; }
+        .navbar { background: #0d0d1a !important; border-bottom: 1px solid #2a2a4a; }
+        .progress { background: #2a2a4a; }
+        .btn-sm { font-size: 0.8rem; }
+        .equity-timeframe .btn { color: #8888aa; border-color: #2a2a4a; }
+        .equity-timeframe .btn.active { color: #fff; background: #4fc3f7; border-color: #4fc3f7; }
+    </style>
+</head>
+<body>
+
+<nav class="navbar navbar-dark px-3">
+    <span class="navbar-brand mb-0 h5">
+        <i class="bi bi-currency-bitcoin"></i> CryptoTrader
+    </span>
+    <div class="d-flex align-items-center gap-3">
+        <span id="bot-status">
+            <span class="status-dot stopped"></span>
+            <span id="bot-status-text">Checking...</span>
+        </span>
+        <span id="bot-uptime" class="text-muted small"></span>
+        <button id="btn-start" class="btn btn-success btn-sm" onclick="startBot()">
+            <i class="bi bi-play-fill"></i> Start
+        </button>
+        <button id="btn-stop" class="btn btn-outline-danger btn-sm" onclick="stopBot()">
+            <i class="bi bi-stop-fill"></i> Stop
+        </button>
+        <small id="last-updated" class="text-muted"></small>
+    </div>
+</nav>
+
+<div class="container-fluid p-3">
+
+    <!-- Risk Alert Banner -->
+    <div id="risk-alert" class="alert alert-danger d-none mb-3">
+        <i class="bi bi-exclamation-triangle-fill"></i>
+        <strong>Trading HALTED:</strong> <span id="halt-reason"></span>
+    </div>
+
+    <!-- KPI Cards -->
+    <div class="row g-3 mb-3">
+        <div class="col-md-3">
+            <div class="card h-100">
+                <div class="card-body text-center">
+                    <div class="kpi-label">Portfolio Value</div>
+                    <div class="kpi-value" id="portfolio-value">--</div>
+                </div>
+            </div>
+        </div>
+        <div class="col-md-3">
+            <div class="card h-100">
+                <div class="card-body text-center">
+                    <div class="kpi-label">Daily P&amp;L</div>
+                    <div class="kpi-value" id="daily-pnl">--</div>
+                </div>
+            </div>
+        </div>
+        <div class="col-md-3">
+            <div class="card h-100">
+                <div class="card-body text-center">
+                    <div class="kpi-label">Free Balance</div>
+                    <div class="kpi-value" id="free-balance">--</div>
+                </div>
+            </div>
+        </div>
+        <div class="col-md-3">
+            <div class="card h-100">
+                <div class="card-body text-center">
+                    <div class="kpi-label">Open Positions</div>
+                    <div class="kpi-value" id="open-positions-count">--</div>
+                    <div id="trade-stats" class="small text-muted"></div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Equity Curve + Risk Metrics -->
+    <div class="row g-3 mb-3">
+        <div class="col-lg-8">
+            <div class="card h-100">
+                <div class="card-header d-flex justify-content-between align-items-center">
+                    <span><i class="bi bi-graph-up"></i> Equity Curve</span>
+                    <div class="btn-group btn-group-sm equity-timeframe">
+                        <button class="btn" onclick="loadEquity(1)">1h</button>
+                        <button class="btn" onclick="loadEquity(6)">6h</button>
+                        <button class="btn active" onclick="loadEquity(24)">24h</button>
+                        <button class="btn" onclick="loadEquity(168)">7d</button>
+                    </div>
+                </div>
+                <div class="card-body">
+                    <canvas id="equity-chart" height="220"></canvas>
+                </div>
+            </div>
+        </div>
+        <div class="col-lg-4">
+            <div class="card h-100">
+                <div class="card-header"><i class="bi bi-shield-check"></i> Risk Status</div>
+                <div class="card-body" id="risk-metrics">
+                    <div class="text-muted text-center">Loading...</div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Open Positions -->
+    <div class="card mb-3">
+        <div class="card-header"><i class="bi bi-wallet2"></i> Open Positions</div>
+        <div class="card-body p-0">
+            <div class="table-responsive">
+                <table class="table table-hover table-sm">
+                    <thead>
+                        <tr>
+                            <th>Symbol</th><th>Side</th><th>Entry</th><th>Current</th>
+                            <th>Qty</th><th>Cost</th><th>Unrealized P&amp;L</th>
+                            <th>Stop Loss</th><th>Take Profit</th><th>Strategy</th>
+                        </tr>
+                    </thead>
+                    <tbody id="positions-body">
+                        <tr><td colspan="10" class="text-center text-muted py-3">No open positions</td></tr>
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </div>
+
+    <!-- Trade History + Strategy Log -->
+    <div class="row g-3 mb-3">
+        <div class="col-lg-7">
+            <div class="card">
+                <div class="card-header"><i class="bi bi-clock-history"></i> Trade History</div>
+                <div class="card-body p-0 scroll-table">
+                    <table class="table table-hover table-sm">
+                        <thead>
+                            <tr>
+                                <th>Closed</th><th>Symbol</th><th>Side</th><th>Entry</th>
+                                <th>Exit</th><th>P&amp;L</th><th>P&amp;L%</th>
+                                <th>Strategy</th><th>Reason</th>
+                            </tr>
+                        </thead>
+                        <tbody id="trades-body">
+                            <tr><td colspan="9" class="text-center text-muted py-3">No closed trades yet</td></tr>
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+        <div class="col-lg-5">
+            <div class="card">
+                <div class="card-header"><i class="bi bi-cpu"></i> Strategy Activity</div>
+                <div class="card-body p-0 scroll-table">
+                    <table class="table table-hover table-sm">
+                        <thead>
+                            <tr>
+                                <th>Time</th><th>Symbol</th><th>Regime</th>
+                                <th>Strategy</th><th>Signal</th><th>Conf</th>
+                            </tr>
+                        </thead>
+                        <tbody id="strategy-body">
+                            <tr><td colspan="6" class="text-center text-muted py-3">No data</td></tr>
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+    </div>
+
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+<script>
+// State
+let equityChart = null;
+let currentEquityHours = 24;
+const REFRESH = 10000;
+
+// Helpers
+const $ = id => document.getElementById(id);
+const usd = v => v != null ? '$' + parseFloat(v).toFixed(2) : '--';
+const pct = v => v != null ? (parseFloat(v) * 100).toFixed(2) + '%' : '--';
+const pnlCls = v => parseFloat(v) >= 0 ? 'text-profit' : 'text-loss';
+const pnlSign = v => parseFloat(v) >= 0 ? '+' : '';
+
+function parseISO(iso) {
+    if (!iso) return null;
+    // Handle +00:00 timezone, missing Z, etc
+    if (!iso.endsWith('Z') && !iso.includes('+') && !iso.includes('-', 10)) iso += 'Z';
+    return new Date(iso);
+}
+function fmtTime(iso) {
+    const d = parseISO(iso);
+    if (!d || isNaN(d)) return '--';
+    return d.toLocaleTimeString([], {hour:'2-digit', minute:'2-digit', second:'2-digit'});
+}
+function fmtDateTime(iso) {
+    const d = parseISO(iso);
+    if (!d || isNaN(d)) return '--';
+    return d.toLocaleDateString([], {month:'short', day:'numeric'}) + ' ' +
+           d.toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'});
+}
+
+async function api(url) {
+    try {
+        const r = await fetch(url);
+        if (!r.ok) throw new Error(`HTTP ${r.status}`);
+        return await r.json();
+    } catch (e) {
+        console.error(`API ${url}:`, e);
+        return null;
+    }
+}
+
+// Load functions
+async function loadStatus() {
+    const d = await api('/api/status');
+    if (!d) return;
+    const dot = $('bot-status').querySelector('.status-dot');
+    const txt = $('bot-status-text');
+    if (d.running) {
+        dot.className = 'status-dot running';
+        txt.textContent = 'Running';
+        $('bot-uptime').textContent = d.uptime || '';
+        $('btn-start').disabled = true;
+        $('btn-stop').disabled = false;
+    } else {
+        dot.className = 'status-dot stopped';
+        txt.textContent = 'Stopped';
+        $('bot-uptime').textContent = '';
+        $('btn-start').disabled = false;
+        $('btn-stop').disabled = true;
+    }
+}
+
+async function loadPortfolio() {
+    const d = await api('/api/portfolio');
+    if (!d) return;
+    $('portfolio-value').textContent = usd(d.total_value);
+    $('portfolio-value').className = 'kpi-value';
+
+    const dpnl = $('daily-pnl');
+    dpnl.innerHTML = `<span class="${pnlCls(d.daily_pnl)}">${pnlSign(d.daily_pnl)}${usd(d.daily_pnl)}</span>
+                      <div class="small ${pnlCls(d.daily_pnl_pct)}">${pnlSign(d.daily_pnl_pct)}${pct(d.daily_pnl_pct)}</div>`;
+
+    $('free-balance').textContent = usd(d.free_balance);
+    $('open-positions-count').textContent = d.open_positions ?? '--';
+
+    if (d.stats && d.stats.total_trades > 0) {
+        $('trade-stats').innerHTML = `${d.stats.total_trades} trades | ${pct(d.stats.win_rate)} win rate`;
+    }
+}
+
+async function loadPositions() {
+    const d = await api('/api/positions');
+    const tb = $('positions-body');
+    if (!d || d.length === 0) {
+        tb.innerHTML = '<tr><td colspan="10" class="text-center text-muted py-3">No open positions</td></tr>';
+        return;
+    }
+    tb.innerHTML = d.map(t => `<tr>
+        <td><strong>${t.symbol}</strong></td>
+        <td><span class="badge ${t.side==='buy'?'badge-buy':'badge-sell'}">${t.side.toUpperCase()}</span></td>
+        <td>${usd(t.price)}</td>
+        <td>${usd(t.current_price)}</td>
+        <td>${parseFloat(t.quantity).toFixed(6)}</td>
+        <td>${usd(t.cost)}</td>
+        <td class="${pnlCls(t.unrealized_pnl)}"><strong>${pnlSign(t.unrealized_pnl)}${usd(t.unrealized_pnl)}</strong>
+            <small>(${pnlSign(t.unrealized_pnl_pct)}${pct(t.unrealized_pnl_pct)})</small></td>
+        <td>${usd(t.stop_loss)}</td>
+        <td>${usd(t.take_profit)}</td>
+        <td><span class="badge bg-info">${t.strategy||'--'}</span></td>
+    </tr>`).join('');
+}
+
+async function loadEquity(hours) {
+    if (hours) {
+        currentEquityHours = hours;
+        document.querySelectorAll('.equity-timeframe .btn').forEach(b => b.classList.remove('active'));
+        event?.target?.classList.add('active');
+    }
+    const d = await api(`/api/equity?hours=${currentEquityHours}`);
+    if (!d || d.length === 0) return;
+
+    const labels = d.map(p => {
+        const dt = parseISO(p.timestamp);
+        if (!dt || isNaN(dt)) return '';
+        return currentEquityHours <= 24
+            ? dt.toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'})
+            : dt.toLocaleDateString([], {month:'short', day:'numeric', hour:'2-digit', minute:'2-digit'});
+    });
+    const values = d.map(p => p.total_value);
+
+    if (equityChart) {
+        equityChart.data.labels = labels;
+        equityChart.data.datasets[0].data = values;
+        equityChart.update('none');
+    } else {
+        equityChart = new Chart($('equity-chart').getContext('2d'), {
+            type: 'line',
+            data: {
+                labels,
+                datasets: [{
+                    label: 'Portfolio ($)',
+                    data: values,
+                    borderColor: '#4fc3f7',
+                    backgroundColor: 'rgba(79,195,247,0.08)',
+                    fill: true,
+                    tension: 0.3,
+                    pointRadius: 0,
+                    borderWidth: 2,
+                }]
+            },
+            options: {
+                responsive: true,
+                maintainAspectRatio: false,
+                plugins: { legend: { display: false } },
+                scales: {
+                    x: { ticks: { maxTicksLimit: 10, color: '#666' }, grid: { color: '#1e1e3a' } },
+                    y: { ticks: { color: '#666', callback: v => '$' + v.toFixed(2) }, grid: { color: '#1e1e3a' } }
+                }
+            }
+        });
+    }
+}
+
+async function loadTrades() {
+    const d = await api('/api/trades?limit=50');
+    const tb = $('trades-body');
+    if (!d || d.length === 0) {
+        tb.innerHTML = '<tr><td colspan="9" class="text-center text-muted py-3">No closed trades yet</td></tr>';
+        return;
+    }
+    tb.innerHTML = d.map(t => `<tr>
+        <td>${fmtDateTime(t.close_timestamp)}</td>
+        <td>${t.symbol}</td>
+        <td><span class="badge ${t.side==='buy'?'badge-buy':'badge-sell'}">${t.side.toUpperCase()}</span></td>
+        <td>${usd(t.price)}</td>
+        <td>${usd(t.close_price)}</td>
+        <td class="${pnlCls(t.pnl)}">${pnlSign(t.pnl)}${usd(t.pnl)}</td>
+        <td class="${pnlCls(t.pnl_pct)}">${pnlSign(t.pnl_pct)}${pct(t.pnl_pct)}</td>
+        <td><span class="badge bg-info">${t.strategy||'--'}</span></td>
+        <td><span class="badge ${t.close_reason==='take_profit'?'bg-success':t.close_reason==='stop_loss'?'bg-danger':'bg-secondary'}">${t.close_reason||'--'}</span></td>
+    </tr>`).join('');
+}
+
+async function loadStrategyLog() {
+    const d = await api('/api/strategy-log?limit=50');
+    const tb = $('strategy-body');
+    if (!d || d.length === 0) {
+        tb.innerHTML = '<tr><td colspan="6" class="text-center text-muted py-3">No data</td></tr>';
+        return;
+    }
+    tb.innerHTML = d.map(s => {
+        const sc = s.signal==='BUY'?'badge-buy':s.signal==='SELL'?'badge-sell':'bg-secondary';
+        return `<tr>
+            <td>${fmtTime(s.timestamp)}</td>
+            <td>${s.symbol}</td>
+            <td>${s.regime}</td>
+            <td>${s.strategy_used}</td>
+            <td><span class="badge ${sc}">${s.signal}</span></td>
+            <td>${(s.confidence*100).toFixed(0)}%</td>
+        </tr>`;
+    }).join('');
+}
+
+async function loadRisk() {
+    const d = await api('/api/risk');
+    if (!d) return;
+    const c = $('risk-metrics');
+    const ddPct = (d.drawdown_pct * 100).toFixed(1);
+    const ddBar = Math.min(d.drawdown_pct / 0.30 * 100, 100).toFixed(0);
+    const dlBar = Math.min(Math.abs(d.daily_pnl_pct) / 0.10 * 100, 100).toFixed(0);
+
+    c.innerHTML = `
+        <div class="mb-3">
+            <div class="d-flex justify-content-between"><small class="text-muted">Peak Value</small><strong>${usd(d.peak_value)}</strong></div>
+        </div>
+        <div class="mb-3">
+            <div class="d-flex justify-content-between"><small class="text-muted">Drawdown</small>
+                <strong class="${d.drawdown_pct>0.15?'text-loss':d.drawdown_pct>0.05?'text-warning':'text-profit'}">${ddPct}%</strong></div>
+            <div class="progress mt-1" style="height:5px;">
+                <div class="progress-bar bg-danger" style="width:${ddBar}%"></div>
+            </div>
+            <small class="text-muted">Limit: 30%</small>
+        </div>
+        <div class="mb-3">
+            <div class="d-flex justify-content-between"><small class="text-muted">Daily P&L</small>
+                <strong class="${pnlCls(d.daily_pnl)}">${pnlSign(d.daily_pnl)}${usd(d.daily_pnl)} (${pnlSign(d.daily_pnl_pct)}${pct(d.daily_pnl_pct)})</strong></div>
+            <div class="progress mt-1" style="height:5px;">
+                <div class="progress-bar ${d.daily_pnl_pct<0?'bg-danger':'bg-success'}" style="width:${dlBar}%"></div>
+            </div>
+            <small class="text-muted">Limit: -10%</small>
+        </div>
+        <div class="mb-2">
+            <div class="d-flex justify-content-between"><small class="text-muted">Trading Status</small>
+                <strong class="${d.trading_halted?'text-loss':'text-profit'}">${d.trading_halted?'HALTED':'Active'}</strong></div>
+        </div>`;
+
+    const alert = $('risk-alert');
+    if (d.trading_halted) {
+        alert.classList.remove('d-none');
+        $('halt-reason').textContent = d.halt_reason;
+    } else {
+        alert.classList.add('d-none');
+    }
+}
+
+// Bot control
+async function startBot() {
+    $('btn-start').disabled = true;
+    const r = await fetch('/api/bot/start', {method:'POST'});
+    const d = await r.json();
+    if (!d.success) {
+        alert('Failed: ' + d.message);
+        $('btn-start').disabled = false;
+    }
+    setTimeout(loadStatus, 1500);
+}
+
+async function stopBot() {
+    if (!confirm('Stop the trading bot?')) return;
+    $('btn-stop').disabled = true;
+    const r = await fetch('/api/bot/stop', {method:'POST'});
+    const d = await r.json();
+    if (!d.success) {
+        alert('Failed: ' + d.message);
+        $('btn-stop').disabled = false;
+    }
+    setTimeout(loadStatus, 2000);
+}
+
+// Refresh loop
+async function refreshAll() {
+    await Promise.all([
+        loadStatus(), loadPortfolio(), loadPositions(),
+        loadRisk(), loadTrades(), loadStrategyLog(), loadEquity(),
+    ]);
+    $('last-updated').textContent = 'Updated ' + new Date().toLocaleTimeString();
+}
+
+refreshAll();
+setInterval(refreshAll, REFRESH);
+</script>
+</body>
+</html>
