@@ -37,7 +37,9 @@ MAX_OPEN_POSITIONS = 2           # Allow 2 positions (diversify)
 COOLDOWN_BARS = 5                # Wait 5 bars (~1.25hr on 15m TF) after stop-loss before re-entering same symbol
 MAX_CONSECUTIVE_LOSSES = 2       # After 2 consecutive losses, double cooldown
 MAX_TRADES_PER_HOUR = 2          # Global trade frequency cap
+MAX_TRADES_PER_DAY = 12          # Daily trade cap (prevents fee drain in choppy markets)
 MAX_SAME_DIRECTION_POSITIONS = 1 # Can't have multiple positions in same direction (correlated alts)
+VOLATILE_REGIME_SIZING = 0.67    # Scale position size to 67% (~10% instead of 15%) in volatile markets
 
 # Strategy parameters — optimized for 15m timeframe
 EMA_FAST = 5

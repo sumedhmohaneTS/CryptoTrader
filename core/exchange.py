@@ -1,5 +1,6 @@
 import random
 import time
+import uuid
 
 import ccxt
 
@@ -139,16 +140,27 @@ class Exchange:
         if self.mode == "paper":
             return self._paper_order(symbol, side, quantity, price)
 
+        # Idempotent client order ID — same ID across retries prevents duplicates
+        client_order_id = f"ct_{uuid.uuid4().hex[:16]}"
+
         def _do_order():
             order = self._exchange.create_market_order(
                 symbol, side, quantity,
-                params={"positionSide": "BOTH"}
+                params={"positionSide": "BOTH", "newClientOrderId": client_order_id}
             )
             actual_price = float(order.get("average", order.get("price", price or 0)))
+            filled = float(order.get("filled", quantity))
             logger.info(
-                f"LIVE FUTURES order filled: {side} {quantity} {symbol} "
+                f"LIVE FUTURES order filled: {side} {filled}/{quantity} {symbol} "
                 f"@ ${actual_price:.4f} ({settings.LEVERAGE}x leverage)"
             )
+            # Warn on partial fill
+            if filled < quantity * 0.999:
+                logger.warning(
+                    f"PARTIAL FILL: requested {quantity}, got {filled} for {symbol}. "
+                    f"Tracking filled quantity only."
+                )
+                order["_adjusted_quantity"] = filled
             return order
 
         result = self._retry(_do_order)
@@ -252,12 +264,25 @@ class Exchange:
                 }
             return None
 
+        client_order_id = f"ct_{uuid.uuid4().hex[:16]}"
+
         def _do_close():
             order = self._exchange.create_market_order(
                 symbol, close_side, quantity,
-                params={"positionSide": "BOTH", "reduceOnly": True}
+                params={
+                    "positionSide": "BOTH",
+                    "reduceOnly": True,
+                    "newClientOrderId": client_order_id,
+                }
             )
-            logger.info(f"LIVE FUTURES position closed: {close_side} {quantity} {symbol}")
+            filled = float(order.get("filled", quantity))
+            logger.info(f"LIVE FUTURES position closed: {close_side} {filled}/{quantity} {symbol}")
+            if filled < quantity * 0.999:
+                logger.warning(
+                    f"PARTIAL CLOSE: requested {quantity}, closed {filled} for {symbol}. "
+                    f"Remainder may still be open on exchange."
+                )
+                order["_adjusted_quantity"] = filled
             return order
 
         result = self._retry(_do_close)

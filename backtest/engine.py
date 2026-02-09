@@ -372,9 +372,10 @@ class BacktestEngine:
         if self.risk_manager.check_correlation_exposure(side, self.portfolio.positions):
             return
 
-        # Calculate position size
+        # Calculate position size (regime-aware)
         quantity = self.risk_manager.calculate_position_size(
-            signal, portfolio_value, signal.entry_price
+            signal, portfolio_value, signal.entry_price,
+            regime=regime.value,
         )
         if quantity <= 0:
             return

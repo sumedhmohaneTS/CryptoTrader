@@ -238,9 +238,10 @@ class TradingBot:
             if self.risk_manager.check_correlation_exposure(side, self.portfolio.positions):
                 return
 
-            # Calculate position size
+            # Calculate position size (regime-aware)
             quantity = self.risk_manager.calculate_position_size(
-                signal, portfolio_value, signal.entry_price
+                signal, portfolio_value, signal.entry_price,
+                regime=regime.value,
             )
             if quantity <= 0:
                 return
@@ -254,25 +255,29 @@ class TradingBot:
             )
 
             if order:
+                # Use actual filled quantity (handles partial fills)
+                actual_qty = float(order.get("_adjusted_quantity", order.get("filled", quantity)))
+                actual_price = float(order.get("average", order.get("price", signal.entry_price)))
+
                 # Log trade to database
                 trade_id = await self.db.log_trade(
                     symbol=symbol,
                     side=signal.signal.value.lower(),
-                    price=signal.entry_price,
-                    quantity=quantity,
+                    price=actual_price,
+                    quantity=actual_qty,
                     strategy=signal.strategy,
                     confidence=signal.confidence,
                     stop_loss=signal.stop_loss,
                     take_profit=signal.take_profit,
                 )
 
-                # Track position
+                # Track position with actual filled quantity
                 position = Position(
                     trade_id=trade_id,
                     symbol=symbol,
                     side=signal.signal.value.lower(),
-                    entry_price=signal.entry_price,
-                    quantity=quantity,
+                    entry_price=actual_price,
+                    quantity=actual_qty,
                     stop_loss=signal.stop_loss,
                     take_profit=signal.take_profit,
                     strategy=signal.strategy,

@@ -17,11 +17,13 @@ class RiskManager:
         self._consecutive_losses: int = 0
         self._trades_this_hour: int = 0
         self._hour_start_bar: int = 0
+        self._trades_today: int = 0
 
     def reset_daily(self, portfolio_value: float):
         self.daily_starting_value = portfolio_value
         self.trading_halted = False
         self.halt_reason = ""
+        self._trades_today = 0
 
     def update_peak(self, portfolio_value: float):
         if portfolio_value > self.peak_portfolio_value:
@@ -70,11 +72,19 @@ class RiskManager:
         if self._trades_this_hour >= settings.MAX_TRADES_PER_HOUR:
             logger.info(f"Trade frequency cap hit: {self._trades_this_hour} trades this hour")
             return True
+
+        # Daily trade cap
+        max_daily = getattr(settings, "MAX_TRADES_PER_DAY", 12)
+        if self._trades_today >= max_daily:
+            logger.info(f"Daily trade cap hit: {self._trades_today} trades today")
+            return True
+
         return False
 
     def record_trade_opened(self):
-        """Increment the hourly trade counter."""
+        """Increment the hourly and daily trade counters."""
         self._trades_this_hour += 1
+        self._trades_today += 1
 
     def check_correlation_exposure(self, side: str, positions: dict) -> bool:
         """
@@ -134,12 +144,19 @@ class RiskManager:
         signal: TradeSignal,
         portfolio_value: float,
         current_price: float,
+        regime: str = "",
     ) -> float:
         if signal.signal == Signal.HOLD:
             return 0.0
 
         # Max margin to allocate per trade
         max_margin = portfolio_value * settings.MAX_POSITION_PCT
+
+        # --- Regime-based scaling ---
+        # Volatile markets get reduced sizing (higher ATR = wider stops = more risk)
+        if regime == "volatile":
+            volatile_scale = getattr(settings, "VOLATILE_REGIME_SIZING", 0.67)
+            max_margin *= volatile_scale
 
         # --- Confidence-scaled sizing ---
         # Signal at bare minimum confidence gets 30% of max size,
