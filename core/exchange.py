@@ -37,6 +37,8 @@ class Exchange:
             )
 
     def _setup_futures(self):
+        # Skip SAPI calls that require spot permissions (futures-only key)
+        self._exchange.has["fetchCurrencies"] = False
         self._exchange.load_markets()
         for symbol in settings.DEFAULT_PAIRS:
             try:
