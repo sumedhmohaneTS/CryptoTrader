@@ -34,27 +34,34 @@ class BreakoutStrategy(BaseStrategy):
         signal = Signal.HOLD
         reason_parts = []
 
+        rsi = latest.get("rsi", 50)
+
         # Check for resistance breakout (bullish)
         if resistance_levels:
             nearest_resistance = min(resistance_levels, key=lambda r: abs(r - price))
             if price > nearest_resistance and prev["close"] <= nearest_resistance:
                 signal = Signal.BUY
-                confidence += 0.25
-                reason_parts.append(f"Broke resistance at {nearest_resistance:.4f}")
 
-                # Volume spike is CRITICAL for breakouts (must be 1.5x+)
+                # Breakout margin: price should clear the level meaningfully
+                # Not just 1 tick above — need conviction
+                margin_pct = (price - nearest_resistance) / nearest_resistance if nearest_resistance > 0 else 0
+                if margin_pct > 0.002:  # > 0.2% above resistance
+                    confidence += 0.28
+                    reason_parts.append(f"Clean break above {nearest_resistance:.4f} (+{margin_pct:.2%})")
+                else:
+                    confidence += 0.20
+                    reason_parts.append(f"Marginal break above {nearest_resistance:.4f}")
+
+                # Volume is CRITICAL for breakouts — no middle tier
                 if volume_ratio > 2.0:
                     confidence += 0.25
                     reason_parts.append(f"Very strong volume ({volume_ratio:.1f}x)")
                 elif volume_ratio > 1.5:
                     confidence += 0.18
                     reason_parts.append(f"Strong volume ({volume_ratio:.1f}x)")
-                elif volume_ratio > 1.2:
-                    confidence += 0.08
-                    reason_parts.append(f"Moderate volume ({volume_ratio:.1f}x)")
                 else:
-                    confidence -= 0.10  # Low volume breakout = likely false
-                    reason_parts.append("Low volume warning")
+                    confidence -= 0.15  # No volume = likely false breakout
+                    reason_parts.append(f"Weak volume ({volume_ratio:.1f}x) — false breakout risk")
 
                 # Breakout candle strength (body > 60% of range)
                 candle_body = abs(price - latest["open"])
@@ -62,15 +69,17 @@ class BreakoutStrategy(BaseStrategy):
                 if candle_range > 0 and candle_body / candle_range > 0.7:
                     confidence += 0.12
                     reason_parts.append("Very strong breakout candle")
-                elif candle_range > 0 and candle_body / candle_range > 0.5:
+                elif candle_range > 0 and candle_body / candle_range > 0.6:
                     confidence += 0.06
-                    reason_parts.append("Decent breakout candle")
+                    reason_parts.append("Solid breakout candle")
 
-                # RSI momentum (should be in 50-75 zone)
-                rsi = latest.get("rsi", 50)
+                # RSI momentum (50-75 sweet spot; >80 = exhaustion risk)
                 if 50 < rsi < 75:
                     confidence += 0.10
                     reason_parts.append(f"RSI={rsi:.0f} supports breakout")
+                elif rsi >= 80:
+                    confidence -= 0.10
+                    reason_parts.append(f"RSI={rsi:.0f} exhaustion risk")
 
                 # OBV should confirm
                 if obv > obv_ema:
@@ -82,26 +91,43 @@ class BreakoutStrategy(BaseStrategy):
             nearest_support = min(support_levels, key=lambda s: abs(s - price))
             if price < nearest_support and prev["close"] >= nearest_support:
                 signal = Signal.SELL
-                confidence += 0.25
-                reason_parts.append(f"Broke support at {nearest_support:.4f}")
 
+                # Breakdown margin check
+                margin_pct = (nearest_support - price) / nearest_support if nearest_support > 0 else 0
+                if margin_pct > 0.002:
+                    confidence += 0.28
+                    reason_parts.append(f"Clean break below {nearest_support:.4f} (-{margin_pct:.2%})")
+                else:
+                    confidence += 0.20
+                    reason_parts.append(f"Marginal break below {nearest_support:.4f}")
+
+                # Volume — same strict treatment
                 if volume_ratio > 2.0:
                     confidence += 0.25
                     reason_parts.append(f"Very strong volume ({volume_ratio:.1f}x)")
                 elif volume_ratio > 1.5:
                     confidence += 0.18
                     reason_parts.append(f"Strong volume ({volume_ratio:.1f}x)")
-                elif volume_ratio > 1.2:
-                    confidence += 0.08
                 else:
-                    confidence -= 0.10
-                    reason_parts.append("Low volume warning")
+                    confidence -= 0.15
+                    reason_parts.append(f"Weak volume ({volume_ratio:.1f}x) — false breakdown risk")
 
                 candle_body = abs(price - latest["open"])
                 candle_range = latest["high"] - latest["low"]
                 if candle_range > 0 and candle_body / candle_range > 0.7:
                     confidence += 0.12
                     reason_parts.append("Strong breakdown candle")
+                elif candle_range > 0 and candle_body / candle_range > 0.6:
+                    confidence += 0.06
+                    reason_parts.append("Solid breakdown candle")
+
+                # RSI confirmation for sells (25-50 sweet spot; <20 = oversold bounce risk)
+                if 25 < rsi < 50:
+                    confidence += 0.10
+                    reason_parts.append(f"RSI={rsi:.0f} supports breakdown")
+                elif rsi <= 20:
+                    confidence -= 0.10
+                    reason_parts.append(f"RSI={rsi:.0f} oversold bounce risk")
 
                 if obv < obv_ema:
                     confidence += 0.08

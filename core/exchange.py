@@ -1,4 +1,8 @@
+import random
+import time
+
 import ccxt
+
 from config import settings
 from utils.logger import setup_logger
 
@@ -50,6 +54,39 @@ class Exchange:
                 if "No need to change" not in str(e):
                     logger.warning(f"Failed to set margin type for {symbol}: {e}")
 
+    # ------------------------------------------------------------------
+    # Retry helper
+    # ------------------------------------------------------------------
+
+    def _retry(self, func, *args, **kwargs):
+        """Execute func with exponential backoff retry on network errors."""
+        max_retries = getattr(settings, "MAX_ORDER_RETRIES", 3)
+        base_delay = getattr(settings, "ORDER_RETRY_DELAY", 1.0)
+
+        last_error = None
+        for attempt in range(max_retries):
+            try:
+                return func(*args, **kwargs)
+            except ccxt.NetworkError as e:
+                last_error = e
+                delay = base_delay * (2 ** attempt)
+                logger.warning(
+                    f"Network error (attempt {attempt + 1}/{max_retries}): {e} "
+                    f"-- retrying in {delay:.1f}s"
+                )
+                time.sleep(delay)
+            except ccxt.ExchangeError as e:
+                # Exchange errors (insufficient balance, invalid params) -- don't retry
+                logger.error(f"Exchange error (not retrying): {e}")
+                return None
+
+        logger.error(f"All {max_retries} retries failed: {last_error}")
+        return None
+
+    # ------------------------------------------------------------------
+    # Balance & positions
+    # ------------------------------------------------------------------
+
     def get_balance(self) -> dict[str, float]:
         if self.mode == "paper":
             return dict(self._paper_balance)
@@ -92,14 +129,17 @@ class Exchange:
             logger.error(f"Failed to fetch positions: {e}")
             return []
 
+    # ------------------------------------------------------------------
+    # Order execution
+    # ------------------------------------------------------------------
+
     def place_order(
         self, symbol: str, side: str, quantity: float, price: float | None = None
     ) -> dict | None:
         if self.mode == "paper":
             return self._paper_order(symbol, side, quantity, price)
 
-        try:
-            # Use market orders for futures
+        def _do_order():
             order = self._exchange.create_market_order(
                 symbol, side, quantity,
                 params={"positionSide": "BOTH"}
@@ -110,9 +150,11 @@ class Exchange:
                 f"@ ${actual_price:.4f} ({settings.LEVERAGE}x leverage)"
             )
             return order
-        except Exception as e:
-            logger.error(f"Failed to place futures order: {e}")
-            return None
+
+        result = self._retry(_do_order)
+        if result is None:
+            logger.error(f"Failed to place futures order for {symbol} after retries")
+        return result
 
     def _paper_order(
         self, symbol: str, side: str, quantity: float, price: float | None
@@ -120,6 +162,13 @@ class Exchange:
         if price is None:
             logger.error("Paper trading requires a price")
             return None
+
+        # Simulate slippage: 1-8 bps random
+        slippage_bps = random.uniform(1, 8) / 10000
+        if side == "buy":
+            price = price * (1 + slippage_bps)
+        else:
+            price = price * (1 - slippage_bps)
 
         cost = quantity * price
         margin_required = cost / settings.LEVERAGE
@@ -157,7 +206,7 @@ class Exchange:
 
         logger.info(
             f"PAPER FUTURES order: {side} {quantity:.4f} {symbol} @ ${price:.4f} "
-            f"(margin: ${margin_required:.2f}, {settings.LEVERAGE}x) | "
+            f"(margin: ${margin_required:.2f}, {settings.LEVERAGE}x, slip: {slippage_bps*10000:.1f}bps) | "
             f"Free: ${self._paper_balance.get('USDT', 0):.2f}"
         )
 
@@ -175,6 +224,13 @@ class Exchange:
             price = self.get_current_price(symbol)
             if price <= 0:
                 return None
+
+            # Simulate slippage on close
+            slippage_bps = random.uniform(1, 8) / 10000
+            if close_side == "buy":
+                price = price * (1 + slippage_bps)
+            else:
+                price = price * (1 - slippage_bps)
 
             if symbol in self._paper_positions:
                 pos = self._paper_positions.pop(symbol)
@@ -196,16 +252,18 @@ class Exchange:
                 }
             return None
 
-        try:
+        def _do_close():
             order = self._exchange.create_market_order(
                 symbol, close_side, quantity,
                 params={"positionSide": "BOTH", "reduceOnly": True}
             )
             logger.info(f"LIVE FUTURES position closed: {close_side} {quantity} {symbol}")
             return order
-        except Exception as e:
-            logger.error(f"Failed to close futures position: {e}")
-            return None
+
+        result = self._retry(_do_close)
+        if result is None:
+            logger.error(f"Failed to close futures position for {symbol} after retries")
+        return result
 
     def cancel_order(self, order_id: str, symbol: str) -> bool:
         if self.mode == "paper":
@@ -228,3 +286,74 @@ class Exchange:
         except Exception as e:
             logger.error(f"Failed to fetch price for {symbol}: {e}")
             return 0.0
+
+    # ------------------------------------------------------------------
+    # Position reconciliation (live mode only)
+    # ------------------------------------------------------------------
+
+    def reconcile_positions(self, tracked_positions: dict) -> list[dict]:
+        """
+        Compare bot's tracked positions vs exchange's actual positions.
+        Returns a list of discrepancies for logging/alerting.
+
+        Each discrepancy is a dict with:
+            type: "ghost" (bot thinks we have it, exchange doesn't)
+                  | "orphan" (exchange has it, bot doesn't track it)
+                  | "size_mismatch" (both have it, quantities differ)
+            symbol: str
+            details: str
+        """
+        if self.mode == "paper":
+            return []
+
+        discrepancies = []
+
+        try:
+            exchange_positions = self.get_futures_positions()
+        except Exception as e:
+            logger.error(f"Reconciliation failed -- could not fetch positions: {e}")
+            return []
+
+        exchange_map = {}
+        for p in exchange_positions:
+            raw_symbol = p["symbol"]
+            symbol = raw_symbol.split(":")[0] if ":" in raw_symbol else raw_symbol
+            exchange_map[symbol] = p
+
+        # Check for ghost positions (bot tracks, exchange doesn't have)
+        for symbol in tracked_positions:
+            if symbol not in exchange_map:
+                discrepancies.append({
+                    "type": "ghost",
+                    "symbol": symbol,
+                    "details": f"Bot tracks position in {symbol} but exchange has none",
+                })
+
+        # Check for orphans and size mismatches
+        for symbol, ex_pos in exchange_map.items():
+            if symbol not in tracked_positions:
+                if symbol in [s for s in settings.DEFAULT_PAIRS]:
+                    discrepancies.append({
+                        "type": "orphan",
+                        "symbol": symbol,
+                        "details": (
+                            f"Exchange has {ex_pos['side']} {ex_pos['contracts']:.6f} {symbol} "
+                            f"but bot doesn't track it"
+                        ),
+                    })
+            else:
+                tracked = tracked_positions[symbol]
+                if abs(tracked.quantity - ex_pos["contracts"]) > 1e-8:
+                    discrepancies.append({
+                        "type": "size_mismatch",
+                        "symbol": symbol,
+                        "details": (
+                            f"{symbol} size mismatch: bot={tracked.quantity:.6f}, "
+                            f"exchange={ex_pos['contracts']:.6f}"
+                        ),
+                    })
+
+        for d in discrepancies:
+            logger.warning(f"RECONCILIATION [{d['type']}]: {d['details']}")
+
+        return discrepancies

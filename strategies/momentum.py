@@ -53,11 +53,15 @@ class MomentumStrategy(BaseStrategy):
 
         if bullish_cross or (ema_fast > ema_slow and price > ema_trend):
             signal = Signal.BUY
-            confidence += 0.20
-            reason_parts.append("EMA bullish cross" if bullish_cross else "Price above trend EMA")
+            if bullish_cross:
+                confidence += 0.20
+                reason_parts.append("EMA bullish cross")
+            else:
+                confidence += 0.10  # Trend continuation -- weaker than actual crossover
+                reason_parts.append("Price above trend EMA")
 
-            # RSI confirmation (not overbought, in momentum zone)
-            if 40 < rsi < settings.RSI_OVERBOUGHT:
+            # RSI confirmation (tighter band: 45-70)
+            if 45 < rsi < 70:
                 confidence += 0.15
                 reason_parts.append(f"RSI={rsi:.0f} confirms")
             elif rsi >= settings.RSI_OVERBOUGHT:
@@ -72,13 +76,13 @@ class MomentumStrategy(BaseStrategy):
                 confidence += 0.10
                 reason_parts.append("MACD histogram positive")
 
-            # Volume confirmation (must be 1.5x+ average)
+            # Volume confirmation (only reward 1.5x+, penalize low volume)
             if volume_ratio > 1.5:
                 confidence += 0.15
                 reason_parts.append(f"Strong volume ({volume_ratio:.1f}x)")
-            elif volume_ratio > 1.2:
-                confidence += 0.08
-                reason_parts.append(f"Above-avg volume ({volume_ratio:.1f}x)")
+            elif volume_ratio < 0.8:
+                confidence -= 0.10
+                reason_parts.append(f"Low volume ({volume_ratio:.1f}x)")
 
             # OBV confirms buying pressure
             if obv > obv_ema:
@@ -100,8 +104,12 @@ class MomentumStrategy(BaseStrategy):
 
         elif bearish_cross or (ema_fast < ema_slow and price < ema_trend):
             signal = Signal.SELL
-            confidence += 0.20
-            reason_parts.append("EMA bearish cross" if bearish_cross else "Price below trend EMA")
+            if bearish_cross:
+                confidence += 0.20
+                reason_parts.append("EMA bearish cross")
+            else:
+                confidence += 0.10  # Trend continuation -- weaker than actual crossover
+                reason_parts.append("Price below trend EMA")
 
             if rsi < settings.RSI_OVERSOLD:
                 confidence -= 0.15
@@ -116,9 +124,13 @@ class MomentumStrategy(BaseStrategy):
             elif macd_hist < 0:
                 confidence += 0.10
 
+            # Volume confirmation (only reward 1.5x+, penalize low volume)
             if volume_ratio > 1.5:
                 confidence += 0.15
                 reason_parts.append(f"Strong sell volume ({volume_ratio:.1f}x)")
+            elif volume_ratio < 0.8:
+                confidence -= 0.10
+                reason_parts.append(f"Low volume ({volume_ratio:.1f}x)")
 
             if obv < obv_ema:
                 confidence += 0.10

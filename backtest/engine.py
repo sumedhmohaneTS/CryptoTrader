@@ -134,7 +134,7 @@ class BacktestEngine:
                 self.risk_manager.reset_daily(portfolio_value)
 
             # -- Check open positions for SL/TP exits --
-            self._check_exits(timestamp)
+            self._check_exits(timestamp, bar_idx)
 
             # -- Update portfolio value & risk --
             portfolio_value = self._calculate_portfolio_value(timestamp)
@@ -237,7 +237,7 @@ class BacktestEngine:
         prices = self._get_current_prices(timestamp)
         return self.portfolio.calculate_portfolio_value(self.balance, prices)
 
-    def _check_exits(self, timestamp):
+    def _check_exits(self, timestamp, bar_index: int = 0):
         """Check all open positions for stop-loss or take-profit hits."""
         symbols_to_close = []
 
@@ -272,13 +272,19 @@ class BacktestEngine:
                 symbols_to_close.append((symbol, exit_price, exit_reason, timestamp))
 
         for symbol, exit_price, exit_reason, ts in symbols_to_close:
-            self._close_position(symbol, exit_price, exit_reason, ts)
+            self._close_position(symbol, exit_price, exit_reason, ts, bar_index)
 
-    def _close_position(self, symbol: str, exit_price: float, reason: str, timestamp):
+    def _close_position(self, symbol: str, exit_price: float, reason: str, timestamp, bar_index: int = 0):
         """Close a position and record the trade."""
         position = self.portfolio.remove_position(symbol)
         if position is None:
             return
+
+        # Register stop-loss/win with risk manager for cooldown tracking
+        if reason == "stop_loss":
+            self.risk_manager.register_stop_loss(symbol, bar_index)
+        elif reason == "take_profit":
+            self.risk_manager.register_win()
 
         # Apply slippage to exit
         if position.side == "buy":
@@ -333,6 +339,12 @@ class BacktestEngine:
 
     def _analyze_and_trade(self, symbol: str, timestamp, bar_idx: int, portfolio_value: float):
         """Analyze a symbol and potentially open a new position."""
+        # Dynamic risk checks: cooldown, frequency, correlation
+        if self.risk_manager.check_cooldown(symbol, bar_idx):
+            return
+        if self.risk_manager.check_trade_frequency(bar_idx):
+            return
+
         # Get indicator window (last 200 bars)
         df = self._get_indicator_window(symbol, timestamp)
         if df.empty or len(df) < 50:
@@ -353,6 +365,11 @@ class BacktestEngine:
 
         # Validate via risk manager
         if not self.risk_manager.validate_signal(signal):
+            return
+
+        # Check correlation exposure (don't stack same-direction positions)
+        side = signal.signal.value.lower()
+        if self.risk_manager.check_correlation_exposure(side, self.portfolio.positions):
             return
 
         # Calculate position size
@@ -394,6 +411,7 @@ class BacktestEngine:
         # Store entry time for trade records
         position._entry_time = timestamp
         self.portfolio.add_position(position)
+        self.risk_manager.record_trade_opened()
 
         logger.debug(
             f"OPEN {signal.signal.value} {symbol} @ {adjusted_entry:.4f} | "

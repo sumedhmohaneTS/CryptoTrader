@@ -10,7 +10,8 @@ Autonomous crypto trading bot that runs 24/7 on Binance. Uses multiple trading s
 
 - **3 Trading Strategies** — Momentum (EMA crossover + RSI + MACD), Mean Reversion (Bollinger Bands + RSI), Breakout (S/R levels + volume)
 - **Auto Strategy Selection** — Detects market regime (trending/ranging/volatile) via ADX and picks the best strategy
-- **Risk Management** — 5% max per trade, ATR-based stop-losses, 2:1 R:R ratio, daily loss limits, drawdown circuit breaker
+- **Risk Management** — Dynamic position sizing (confidence-scaled + drawdown-adjusted), ATR-based stop-losses, 2:1 R:R ratio, cooldown after stop-losses, correlation caps, daily loss limits, drawdown circuit breaker
+- **Execution Resilience** — Retry with exponential backoff on network errors, position reconciliation vs exchange, paper slippage simulation
 - **Paper Trading** — Full simulation mode with no real money at risk
 - **Web Dashboard** — Real-time portfolio tracking, equity curve, trade history, strategy logs, Start/Stop control
 - **24/7 Operation** — Watchdog process auto-restarts on crashes, runs on Windows startup
@@ -69,19 +70,46 @@ The web dashboard at `http://127.0.0.1:5000` provides:
 
 The bot is also configured to auto-start on Windows login via the Startup folder.
 
+## Backtesting
+
+Run historical simulations to validate strategy performance before going live.
+
+```bash
+# Single backtest over a date range
+python -m backtest.run_backtest --start 2025-11-01 --end 2026-02-01 --balance 100
+
+# Walk-forward validation (rolling train/test windows to detect overfitting)
+python -m backtest.run_backtest --start 2025-06-01 --end 2026-02-01 --walk-forward
+```
+
+The backtest engine mirrors the live bot exactly: same strategies, same risk manager, same indicator pipeline. It adds realistic simulation costs (0.04% fees per side, 0.05% slippage per fill).
+
+**Walk-forward validation** splits the date range into rolling 2-month train / 1-month test windows and compares in-sample vs out-of-sample performance. If test-period returns are within 30% of train-period returns, the strategy generalizes well.
+
+Output includes:
+- Overall metrics (return, win rate, profit factor, Sharpe, max drawdown)
+- Per-strategy breakdown (momentum, mean reversion, breakout)
+- Per-symbol breakdown
+- Equity curve chart (saved to `data/backtest_equity.png`)
+
 ## Configuration
 
 All parameters are in `config/settings.py`:
 
 | Parameter | Default | Description |
 |-----------|---------|-------------|
-| `MAX_POSITION_PCT` | 5% | Max portfolio allocation per trade |
+| `MAX_POSITION_PCT` | 15% | Max portfolio allocation per trade |
 | `STOP_LOSS_ATR_MULTIPLIER` | 1.5x | Stop-loss distance in ATR units |
 | `REWARD_RISK_RATIO` | 2.0 | Minimum take-profit to stop-loss ratio |
-| `DAILY_LOSS_LIMIT_PCT` | 10% | Halt trading after this daily loss |
-| `MAX_DRAWDOWN_PCT` | 30% | Circuit breaker from portfolio peak |
-| `MAX_OPEN_POSITIONS` | 3 | Max concurrent positions |
-| `MIN_SIGNAL_CONFIDENCE` | 0.6 | Minimum signal confidence to trade |
+| `DAILY_LOSS_LIMIT_PCT` | 15% | Halt trading after this daily loss |
+| `MAX_DRAWDOWN_PCT` | 25% | Circuit breaker from portfolio peak |
+| `MAX_OPEN_POSITIONS` | 2 | Max concurrent positions |
+| `MIN_SIGNAL_CONFIDENCE` | 0.75 | Minimum signal confidence to trade |
+| `STRATEGY_MIN_CONFIDENCE` | per-strategy | Momentum: 0.80, Mean Rev: 0.72, Breakout: 0.70 |
+| `COOLDOWN_BARS` | 4 | Bars to wait after stop-loss before re-entry |
+| `MAX_CONSECUTIVE_LOSSES` | 3 | After this many losses, double cooldown |
+| `MAX_TRADES_PER_HOUR` | 2 | Global trade frequency cap |
+| `MAX_SAME_DIRECTION_POSITIONS` | 1 | Correlation cap (same-direction limit) |
 | `PRIMARY_TIMEFRAME` | 15m | Candle timeframe for analysis |
 | `BOT_LOOP_INTERVAL_SECONDS` | 60 | Seconds between analysis cycles |
 
@@ -113,6 +141,12 @@ CryptoTrader/
 │   ├── db_reader.py             # Read-only DB queries
 │   └── price_service.py         # Cached live prices
 ├── templates/dashboard.html     # Dashboard UI
+├── backtest/
+│   ├── engine.py                # Bar-by-bar simulation engine
+│   ├── data_loader.py           # Historical data downloader/cache
+│   ├── reporter.py              # Performance metrics + equity plot
+│   ├── walk_forward.py          # Rolling-window walk-forward validation
+│   └── run_backtest.py          # CLI entry point for backtests
 ├── main.py                      # CLI entry point
 ├── run_forever.py               # Watchdog (auto-restart)
 └── requirements.txt

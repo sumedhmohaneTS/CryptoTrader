@@ -12,6 +12,12 @@ class RiskManager:
         self.trading_halted = False
         self.halt_reason = ""
 
+        # Dynamic risk state
+        self._last_stop_loss_bar: dict[str, int] = {}   # symbol -> bar index of last SL hit
+        self._consecutive_losses: int = 0
+        self._trades_this_hour: int = 0
+        self._hour_start_bar: int = 0
+
     def reset_daily(self, portfolio_value: float):
         self.daily_starting_value = portfolio_value
         self.trading_halted = False
@@ -20,6 +26,70 @@ class RiskManager:
     def update_peak(self, portfolio_value: float):
         if portfolio_value > self.peak_portfolio_value:
             self.peak_portfolio_value = portfolio_value
+
+    def register_stop_loss(self, symbol: str, bar_index: int):
+        """Record that a stop-loss was hit for cooldown tracking."""
+        self._last_stop_loss_bar[symbol] = bar_index
+        self._consecutive_losses += 1
+        logger.info(
+            f"Stop-loss registered for {symbol} at bar {bar_index} "
+            f"(consecutive losses: {self._consecutive_losses})"
+        )
+
+    def register_win(self):
+        """Reset consecutive loss counter on a winning trade."""
+        self._consecutive_losses = 0
+
+    def check_cooldown(self, symbol: str, bar_index: int) -> bool:
+        """Return True if the symbol is still in cooldown after a stop-loss."""
+        last_sl_bar = self._last_stop_loss_bar.get(symbol)
+        if last_sl_bar is None:
+            return False
+
+        cooldown = settings.COOLDOWN_BARS
+        # Double cooldown after MAX_CONSECUTIVE_LOSSES
+        if self._consecutive_losses >= settings.MAX_CONSECUTIVE_LOSSES:
+            cooldown *= 2
+
+        bars_since = bar_index - last_sl_bar
+        if bars_since < cooldown:
+            logger.info(
+                f"{symbol} in cooldown: {bars_since}/{cooldown} bars since stop-loss"
+            )
+            return True
+        return False
+
+    def check_trade_frequency(self, bar_index: int) -> bool:
+        """Return True if trade frequency cap is exceeded (should block trade)."""
+        # Each hour = 4 bars on 15m TF
+        bars_per_hour = 4
+        if bar_index - self._hour_start_bar >= bars_per_hour:
+            self._hour_start_bar = bar_index
+            self._trades_this_hour = 0
+
+        if self._trades_this_hour >= settings.MAX_TRADES_PER_HOUR:
+            logger.info(f"Trade frequency cap hit: {self._trades_this_hour} trades this hour")
+            return True
+        return False
+
+    def record_trade_opened(self):
+        """Increment the hourly trade counter."""
+        self._trades_this_hour += 1
+
+    def check_correlation_exposure(self, side: str, positions: dict) -> bool:
+        """
+        Return True if opening another position in this direction would exceed
+        the same-direction limit (all traded alts are correlated).
+        """
+        max_same = getattr(settings, "MAX_SAME_DIRECTION_POSITIONS", 2)
+        same_direction = sum(1 for p in positions.values() if p.side == side)
+        if same_direction >= max_same:
+            logger.info(
+                f"Correlation cap: already {same_direction} {side} position(s), "
+                f"max {max_same}"
+            )
+            return True
+        return False
 
     def check_circuit_breakers(
         self, portfolio_value: float, open_position_count: int
@@ -53,6 +123,12 @@ class RiskManager:
 
         return True
 
+    def _get_current_drawdown(self, portfolio_value: float) -> float:
+        """Calculate current drawdown from peak as a fraction (0.0 to 1.0)."""
+        if self.peak_portfolio_value <= 0:
+            return 0.0
+        return max(0.0, (self.peak_portfolio_value - portfolio_value) / self.peak_portfolio_value)
+
     def calculate_position_size(
         self,
         signal: TradeSignal,
@@ -65,11 +141,35 @@ class RiskManager:
         # Max margin to allocate per trade
         max_margin = portfolio_value * settings.MAX_POSITION_PCT
 
+        # --- Confidence-scaled sizing ---
+        # Signal at bare minimum confidence gets 30% of max size,
+        # signal at 0.95+ gets full size.
+        min_conf = getattr(settings, "STRATEGY_MIN_CONFIDENCE", {}).get(
+            signal.strategy, settings.MIN_SIGNAL_CONFIDENCE
+        )
+        conf_range = 1.0 - min_conf
+        if conf_range > 0:
+            conf_excess = (signal.confidence - min_conf) / conf_range
+            # Scale from 0.30 (bare minimum) to 1.0 (max confidence)
+            scale = 0.30 + 0.70 * max(0.0, min(1.0, conf_excess))
+        else:
+            scale = 1.0
+        max_margin *= scale
+
+        # --- Drawdown-based reduction ---
+        # If drawdown > 10%, progressively reduce. At 20% drawdown -> 25% of normal.
+        drawdown = self._get_current_drawdown(portfolio_value)
+        if drawdown > 0.10:
+            # Linear reduction: at 10% DD -> 100%, at 20% DD -> 25%
+            dd_scale = max(0.25, 1.0 - (drawdown - 0.10) * 7.5)
+            max_margin *= dd_scale
+            logger.info(f"Drawdown sizing: {drawdown:.1%} DD, scale={dd_scale:.2f}")
+
         # With leverage, our notional position is larger
         leverage = getattr(settings, "LEVERAGE", 1)
         max_notional = max_margin * leverage
 
-        # ATR-based sizing: higher ATR → smaller position
+        # ATR-based sizing: higher ATR -> smaller position
         risk_per_unit = abs(current_price - signal.stop_loss)
         if risk_per_unit <= 0:
             logger.warning("Invalid stop-loss, skipping position")
@@ -95,9 +195,13 @@ class RiskManager:
         if signal.signal == Signal.HOLD:
             return False
 
-        if signal.confidence < settings.MIN_SIGNAL_CONFIDENCE:
+        # Per-strategy confidence threshold, falling back to global minimum
+        min_conf = getattr(settings, "STRATEGY_MIN_CONFIDENCE", {}).get(
+            signal.strategy, settings.MIN_SIGNAL_CONFIDENCE
+        )
+        if signal.confidence < min_conf:
             logger.info(
-                f"Signal confidence too low: {signal.confidence:.2f} < {settings.MIN_SIGNAL_CONFIDENCE}"
+                f"Signal confidence too low: {signal.confidence:.2f} < {min_conf} ({signal.strategy})"
             )
             return False
 

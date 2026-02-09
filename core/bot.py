@@ -1,4 +1,5 @@
 import asyncio
+import time
 from datetime import datetime, timezone
 
 from config import settings
@@ -32,6 +33,7 @@ class TradingBot:
         self.risk_manager = RiskManager()
         self.news_service = NewsService()
         self.db = Database()
+        self._tick_counter = 0  # Monotonic bar counter for cooldown tracking
 
     async def start(self):
         await self.db.connect()
@@ -122,6 +124,7 @@ class TradingBot:
                 await asyncio.sleep(settings.BOT_LOOP_INTERVAL_SECONDS)
 
     async def _tick(self):
+        self._tick_counter += 1
         usdt_balance = self.exchange.get_usdt_balance()
         prices = self._get_current_prices()
         total_value = self.portfolio.calculate_portfolio_value(usdt_balance, prices)
@@ -143,6 +146,12 @@ class TradingBot:
                     continue
 
                 await self._analyze_and_trade(symbol, usdt_balance, total_value)
+
+        # Reconcile positions every 5 ticks (live mode only)
+        if self.mode == "live" and self._tick_counter % 5 == 0:
+            discrepancies = self.exchange.reconcile_positions(self.portfolio.positions)
+            if discrepancies:
+                logger.warning(f"Position discrepancies found: {len(discrepancies)}")
 
         # Snapshot portfolio
         await self.db.snapshot_portfolio(
@@ -173,6 +182,12 @@ class TradingBot:
         self, symbol: str, usdt_balance: float, portfolio_value: float
     ):
         try:
+            # Dynamic risk checks: cooldown and frequency cap
+            if self.risk_manager.check_cooldown(symbol, self._tick_counter):
+                return
+            if self.risk_manager.check_trade_frequency(self._tick_counter):
+                return
+
             df = self.fetcher.fetch_ohlcv(
                 symbol, settings.PRIMARY_TIMEFRAME, limit=200
             )
@@ -218,6 +233,11 @@ class TradingBot:
             if not self.risk_manager.validate_signal(signal):
                 return
 
+            # Check correlation exposure
+            side = signal.signal.value.lower()
+            if self.risk_manager.check_correlation_exposure(side, self.portfolio.positions):
+                return
+
             # Calculate position size
             quantity = self.risk_manager.calculate_position_size(
                 signal, portfolio_value, signal.entry_price
@@ -259,6 +279,7 @@ class TradingBot:
                     confidence=signal.confidence,
                 )
                 self.portfolio.add_position(position)
+                self.risk_manager.record_trade_opened()
 
         except Exception as e:
             logger.error(f"Error analyzing {symbol}: {e}", exc_info=True)
@@ -329,6 +350,12 @@ class TradingBot:
             )
 
             self.portfolio.remove_position(symbol)
+
+            # Register with risk manager for cooldown tracking
+            if reason == "stop_loss":
+                self.risk_manager.register_stop_loss(symbol, self._tick_counter)
+            elif reason == "take_profit":
+                self.risk_manager.register_win()
 
             emoji = "+" if pnl >= 0 else ""
             logger.info(

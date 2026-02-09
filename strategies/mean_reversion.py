@@ -44,31 +44,48 @@ class MeanReversionStrategy(BaseStrategy):
         # BUY: Price at or below lower BB + multiple confirmations needed
         if price <= bbl:
             signal = Signal.BUY
-            confidence += 0.20
-            reason_parts.append("Price at lower Bollinger Band")
 
-            # RSI oversold is critical for mean reversion
+            # Distance from band: deeper below BB = stronger mean reversion
+            bb_width = bbu - bbl
+            if bb_width > 0:
+                depth = (bbl - price) / bb_width
+                if depth > 0.10:
+                    confidence += 0.25
+                    reason_parts.append(f"Deep below lower BB ({depth:.0%})")
+                else:
+                    confidence += 0.18
+                    reason_parts.append("Price at lower Bollinger Band")
+            else:
+                confidence += 0.18
+                reason_parts.append("Price at lower Bollinger Band")
+
+            # RSI oversold is critical for mean reversion (tighter bands)
             if rsi <= settings.RSI_OVERSOLD:
                 confidence += 0.25
                 reason_parts.append(f"RSI={rsi:.0f} oversold")
-            elif rsi <= 35:
+            elif rsi <= 32:
                 confidence += 0.10
                 reason_parts.append(f"RSI={rsi:.0f} near oversold")
             else:
-                confidence -= 0.10  # Not oversold = weaker mean reversion signal
+                confidence -= 0.15  # Not oversold = weak mean reversion setup
+                reason_parts.append(f"RSI={rsi:.0f} not oversold")
 
             # Bullish candle at support = reversal confirmation
+            # Full reversal candle (prior bearish + current bullish) is much stronger
             if price > latest["open"] and prev["close"] < prev["open"]:
                 confidence += 0.15
                 reason_parts.append("Bullish reversal candle")
             elif price > latest["open"]:
-                confidence += 0.08
-                reason_parts.append("Bullish candle")
+                confidence += 0.05  # Just a green candle, no reversal pattern
+                reason_parts.append("Bullish candle (no reversal)")
 
-            # Volume spike on reversal
+            # Volume confirmation (reward spikes, penalize low volume)
             if volume_ratio > 1.5:
                 confidence += 0.12
                 reason_parts.append(f"Volume spike ({volume_ratio:.1f}x)")
+            elif volume_ratio < 0.8:
+                confidence -= 0.10
+                reason_parts.append(f"Low volume ({volume_ratio:.1f}x)")
 
             # Bullish divergence strongly supports mean reversion
             if rsi_div == "bullish":
@@ -83,29 +100,46 @@ class MeanReversionStrategy(BaseStrategy):
         # SELL: Price at or above upper BB
         elif price >= bbu:
             signal = Signal.SELL
-            confidence += 0.20
-            reason_parts.append("Price at upper Bollinger Band")
+
+            # Distance from band: further above BB = stronger signal
+            bb_width = bbu - bbl
+            if bb_width > 0:
+                depth = (price - bbu) / bb_width
+                if depth > 0.10:
+                    confidence += 0.25
+                    reason_parts.append(f"Deep above upper BB ({depth:.0%})")
+                else:
+                    confidence += 0.18
+                    reason_parts.append("Price at upper Bollinger Band")
+            else:
+                confidence += 0.18
+                reason_parts.append("Price at upper Bollinger Band")
 
             if rsi >= settings.RSI_OVERBOUGHT:
                 confidence += 0.25
                 reason_parts.append(f"RSI={rsi:.0f} overbought")
-            elif rsi >= 65:
+            elif rsi >= 68:
                 confidence += 0.10
                 reason_parts.append(f"RSI={rsi:.0f} near overbought")
             else:
-                confidence -= 0.10
+                confidence -= 0.15
+                reason_parts.append(f"RSI={rsi:.0f} not overbought")
 
             # Bearish reversal candle
             if price < latest["open"] and prev["close"] > prev["open"]:
                 confidence += 0.15
                 reason_parts.append("Bearish reversal candle")
             elif price < latest["open"]:
-                confidence += 0.08
-                reason_parts.append("Bearish candle")
+                confidence += 0.05
+                reason_parts.append("Bearish candle (no reversal)")
 
+            # Volume confirmation
             if volume_ratio > 1.5:
                 confidence += 0.12
                 reason_parts.append(f"Volume spike ({volume_ratio:.1f}x)")
+            elif volume_ratio < 0.8:
+                confidence -= 0.10
+                reason_parts.append(f"Low volume ({volume_ratio:.1f}x)")
 
             if rsi_div == "bearish":
                 confidence += 0.20
