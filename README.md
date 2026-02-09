@@ -15,7 +15,7 @@ Autonomous crypto trading bot that runs 24/7 on Binance. Uses multiple trading s
 - **Paper Trading** — Full simulation mode with no real money at risk
 - **Web Dashboard** — Real-time portfolio tracking, equity curve, trade history, strategy logs, Start/Stop control
 - **24/7 Operation** — Watchdog process auto-restarts on crashes, runs on Windows startup
-- **5 Trading Pairs** — BTC/USDT, ETH/USDT, SOL/USDT, XRP/USDT, DOGE/USDT
+- **3 Trading Pairs** — XRP/USDT, DOGE/USDT, SOL/USDT (USDT-M futures)
 
 ## Quick Start
 
@@ -105,9 +105,9 @@ All parameters are in `config/settings.py`:
 | `MAX_DRAWDOWN_PCT` | 25% | Circuit breaker from portfolio peak |
 | `MAX_OPEN_POSITIONS` | 2 | Max concurrent positions |
 | `MIN_SIGNAL_CONFIDENCE` | 0.75 | Minimum signal confidence to trade |
-| `STRATEGY_MIN_CONFIDENCE` | per-strategy | Momentum: 0.80, Mean Rev: 0.72, Breakout: 0.70 |
-| `COOLDOWN_BARS` | 4 | Bars to wait after stop-loss before re-entry |
-| `MAX_CONSECUTIVE_LOSSES` | 3 | After this many losses, double cooldown |
+| `STRATEGY_MIN_CONFIDENCE` | per-strategy | Momentum: 0.85, Mean Rev: 0.72, Breakout: 0.70 |
+| `COOLDOWN_BARS` | 5 | Bars to wait after stop-loss before re-entry |
+| `MAX_CONSECUTIVE_LOSSES` | 2 | After this many losses, double cooldown |
 | `MAX_TRADES_PER_HOUR` | 2 | Global trade frequency cap |
 | `MAX_SAME_DIRECTION_POSITIONS` | 1 | Correlation cap (same-direction limit) |
 | `PRIMARY_TIMEFRAME` | 15m | Candle timeframe for analysis |

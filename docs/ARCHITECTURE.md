@@ -106,14 +106,17 @@ while self.running:
        c. Check open positions for stop-loss / take-profit hits
        d. Check circuit breakers (daily loss limit, max drawdown)
        e. For each pair without an open position:
+          - Check cooldown and trade frequency caps
           - Fetch 200 candles of 15m data
           - Classify market regime
           - Run matching strategy → get signal + confidence
-          - Validate signal through risk manager
-          - Calculate position size
+          - Validate signal (per-strategy confidence threshold)
+          - Check correlation exposure (same-direction limit)
+          - Calculate position size (confidence-scaled, drawdown-adjusted)
           - Execute trade
-       f. Snapshot portfolio to database
-       g. Log summary
+       f. Reconcile positions vs exchange (every 5 ticks, live mode)
+       g. Snapshot portfolio to database
+       h. Log summary
     3. Sleep 60 seconds
 ```
 
@@ -140,13 +143,14 @@ DataFetcher.fetch_ohlcv("BTC/USDT", "15m", limit=200)
 ### Step 2: Calculate Indicators
 ```
 add_all_indicators(df)
-  → EMA 9, 21, 50        (trend direction)
-  → RSI 14               (momentum/overbought/oversold)
-  → MACD 12/26/9         (trend momentum + histogram)
-  → Bollinger Bands 20/2 (volatility envelope)
+  → EMA 5, 13, 21        (trend direction — fast/slow/trend)
+  → RSI 8                (momentum/overbought/oversold — tight period)
+  → MACD 5/13/5          (trend momentum + histogram)
+  → Bollinger Bands 10/2 (volatility envelope — tight period)
   → ATR 14               (volatility measurement)
   → ADX 14               (trend strength)
   → Volume SMA 20        (average volume baseline)
+  → OBV + OBV EMA        (on-balance volume for accumulation/distribution)
 ```
 
 ### Step 3: Classify Market Regime
@@ -169,20 +173,30 @@ StrategyManager.get_signal(df, "BTC/USDT")
 
 ### Step 5: Risk Check
 ```
+RiskManager.check_cooldown(symbol, bar_index)
+  → Is symbol still cooling down after a stop-loss?
+  → Cooldown = 5 bars (doubled to 10 after 2 consecutive losses)
+
+RiskManager.check_trade_frequency(bar_index)
+  → Have we opened >= 2 trades this hour?
+
 RiskManager.validate_signal(signal)
-  → Confidence >= 0.6?         (minimum threshold)
+  → Confidence >= per-strategy minimum? (momentum: 0.85, mean_rev: 0.72, breakout: 0.70)
   → Valid stop-loss?            (must be > 0)
   → R:R ratio >= 2.0?          (reward must be 2x the risk)
 
+RiskManager.check_correlation_exposure(side, positions)
+  → Already have a position in same direction? (max 1 per direction)
+
 RiskManager.check_circuit_breakers(portfolio_value, position_count)
-  → Daily loss < 10%?           (halt if exceeded)
-  → Drawdown from peak < 30%?   (halt if exceeded)
-  → Open positions < 3?         (max concurrent trades)
+  → Daily loss < 15%?           (halt if exceeded)
+  → Drawdown from peak < 25%?   (halt if exceeded)
+  → Open positions < 2?         (max concurrent trades)
 
 RiskManager.calculate_position_size(signal, portfolio_value, price)
-  → Max allocation = 5% of portfolio
-  → Quantity = max_allocation / price
-  → Capped so loss at stop-loss doesn't exceed risk budget
+  → Max margin = 15% of portfolio × confidence scale × drawdown scale
+  → Notional = margin × 5x leverage
+  → Quantity capped so loss at stop-loss doesn't exceed risk budget
   → Must be at least $5 (Binance minimum)
 ```
 
@@ -234,53 +248,62 @@ Measures **volatility** as the average candle range.
 
 ### Momentum Strategy (for trending markets)
 
+**Min confidence: 0.85**
+
 **When to buy:**
-- EMA 9 crosses above EMA 21 (or price is above both EMAs)
-- RSI between 40-70 (confirms momentum without being overbought)
-- MACD histogram is positive (momentum is accelerating)
-- Volume above 20-period average (confirms participation)
+- EMA 5 crosses above EMA 13 (crossover: +0.20) or price above trend EMA 21 (continuation: +0.10)
+- RSI between 45-70 (confirms momentum without being overbought: +0.15)
+- MACD histogram positive and rising (+0.15) or just positive (+0.10)
+- Volume > 1.5x average (+0.15); volume < 0.8x penalized (-0.10)
+- OBV above its EMA (+0.10)
+- Bullish RSI/MACD divergence bonus (+0.15/+0.10)
 
 **When to sell:**
-- EMA 9 crosses below EMA 21 (or price is below both EMAs)
-- RSI > 60 (confirms downtrend, not just a dip)
-- MACD histogram is negative
+- EMA 5 crosses below EMA 13 (crossover: +0.20) or price below trend EMA 21 (continuation: +0.10)
+- RSI > 55 confirms downtrend (+0.15); RSI < oversold penalized (-0.15)
+- MACD histogram negative and falling (+0.15) or just negative (+0.10)
+- Same volume and OBV logic as buy side
 
-**Confidence scoring (0-1):**
-| Component | Weight |
-|-----------|--------|
-| EMA crossover/position | +0.35 |
-| RSI confirmation | +0.25 |
-| MACD histogram | +0.20 |
-| Volume above average | +0.15 |
-| Penalties (overbought/oversold) | -0.10 to -0.15 |
+**Key refinement:** Crossover signals get 2x the confidence of trend continuation signals, filtering out weak "riding the trend" entries.
 
 ### Mean Reversion Strategy (for ranging markets)
 
+**Min confidence: 0.72**
+
 **When to buy:**
-- Price touches or breaks below the lower Bollinger Band
-- RSI < 30 (oversold confirmation)
-- Bullish candle forming (close > open = buyers stepping in)
-- Above-average volume (institutional interest)
+- Price at or below lower Bollinger Band (BB 10/2.0)
+- Distance-from-band scaling: deep below BB (+0.25) vs marginal touch (+0.18)
+- RSI <= 25 oversold (+0.25); RSI <= 32 near oversold (+0.10); RSI > 32 penalized (-0.15)
+- Bullish reversal candle (prior bearish + current bullish: +0.15) vs just green candle (+0.05)
+- Volume > 1.5x (+0.12); volume < 0.8x penalized (-0.10)
+- Bullish RSI divergence strongly supports (+0.20)
+- OBV shows accumulation (+0.08)
 
 **When to sell:**
-- Price touches or breaks above the upper Bollinger Band
-- RSI > 70 (overbought confirmation)
-- Bearish candle forming (close < open)
+- Price at or above upper Bollinger Band, with same distance-from-band scaling
+- RSI >= 75 overbought (+0.25); RSI >= 68 near overbought (+0.10); else penalized (-0.15)
+- Same reversal candle, volume, divergence, and OBV logic
 
-**Logic:** In a range-bound market, price tends to revert to the mean (middle Bollinger Band). Buying at the lower band with RSI oversold catches the bounce.
+**Key refinement:** Deep BB penetration scores higher than marginal touches; non-oversold RSI is actively penalized rather than just not rewarded.
 
 ### Breakout Strategy (for volatile markets)
 
+**Min confidence: 0.70**
+
 **When to buy:**
-- Price breaks above a resistance level (previous pivot highs)
-- Previous candle was below resistance, current candle is above
-- Volume spike > 1.5x average (strong conviction)
-- Strong candle body (> 60% of total range)
-- RSI 50-75 (momentum supports the move)
+- Price breaks above resistance with prior candle below it
+- Breakout margin: clean break > 0.2% above level (+0.28) vs marginal break (+0.20)
+- Volume is CRITICAL: > 2.0x (+0.25), > 1.5x (+0.18), below 1.5x penalized (-0.15)
+- Candle body strength: > 70% of range (+0.12), > 60% (+0.06)
+- RSI 50-75 supports breakout (+0.10); RSI >= 80 exhaustion risk (-0.10)
+- OBV confirms breakout direction (+0.08)
 
 **When to sell:**
-- Price breaks below a support level (previous pivot lows)
-- Volume spike confirms the breakdown
+- Price breaks below support with same margin check
+- Same volume, candle strength, and OBV logic
+- RSI 25-50 supports breakdown (+0.10); RSI <= 20 oversold bounce risk (-0.10)
+
+**Key refinement:** No middle-tier volume reward (1.2x removed) — breakouts without strong volume are actively penalized as false breakout risk.
 
 **Support/Resistance Detection:**
 - Scans last 50 candles for pivot highs (local maxima) and pivot lows (local minima)
@@ -296,30 +319,43 @@ Measures **volatility** as the average candle range.
 
 | Control | Value | Purpose |
 |---------|-------|---------|
-| Max position size | 5% of portfolio | Limits exposure per trade |
+| Max position size | 15% of portfolio | Limits exposure per trade |
 | Stop-loss | Entry - 1.5x ATR | Exits losers before they get worse |
-| Take-profit | Entry + 3x ATR | 2:1 reward-to-risk minimum |
-| Min confidence | 0.6 (60%) | Filters weak signals |
+| Take-profit | Entry + 2x risk | 2:1 reward-to-risk minimum |
+| Min confidence | Per-strategy (0.70-0.85) | Filters weak signals |
+
+### Dynamic Risk Controls
+
+| Control | Value | Purpose |
+|---------|-------|---------|
+| Cooldown | 5 bars after stop-loss | Prevents revenge trading on same symbol |
+| Extended cooldown | Doubles after 2 consecutive losses | Slows down during losing streaks |
+| Trade frequency cap | 2 trades/hour | Prevents overtrading |
+| Correlation cap | 1 position per direction | Avoids stacking correlated alt positions |
 
 ### Portfolio-Level Controls
 
 | Control | Value | Trigger Action |
 |---------|-------|----------------|
-| Max open positions | 3 | Stop opening new trades |
-| Daily loss limit | -10% | Halt all trading for the day |
-| Max drawdown | -30% from peak | Halt all trading until manual review |
+| Max open positions | 2 | Stop opening new trades |
+| Daily loss limit | -15% | Halt all trading for the day |
+| Max drawdown | -25% from peak | Halt all trading until manual review |
 
 ### Position Sizing Logic
 
 ```
-1. risk_budget = portfolio_value × 5%    (e.g., $100 × 5% = $5)
-2. risk_per_unit = |entry_price - stop_loss|
-3. max_quantity = risk_budget / risk_per_unit
-4. actual_quantity = min(max_quantity, risk_budget / current_price)
-5. If quantity × price < $5 → skip (too small for Binance)
+1. max_margin = portfolio_value × 15%
+2. Confidence scaling: bare minimum confidence → 30% of max size,
+   max confidence → 100% of max size (linear scale)
+3. Drawdown adjustment: if drawdown > 10%, progressively reduce
+   (at 20% drawdown → only 25% of normal size)
+4. max_notional = max_margin × leverage (5x)
+5. risk_per_unit = |entry_price - stop_loss|
+6. max_quantity = max_notional / risk_per_unit (capped by notional)
+7. If quantity × price < $5 → skip (too small for Binance)
 ```
 
-This ensures that if the stop-loss is hit, you lose at most 5% of your portfolio.
+This ensures position size dynamically adapts to signal quality and portfolio health.
 
 ### Stop-Loss / Take-Profit Monitoring
 
@@ -337,15 +373,17 @@ Every tick (60 seconds), the bot checks all open positions:
 - Exchange simulates orders locally in memory
 - Tracks USDT balance and crypto holdings in a dictionary
 - Uses real Binance prices for order execution and position valuation
+- Simulates realistic slippage (1-8 bps random per fill) on entries and exits
 - Trades are logged to SQLite exactly like live mode
 - Perfect for testing strategies and verifying risk management
 
 ### Live Mode
 - Requires Binance API keys in `.env` file
-- Executes real market orders via ccxt
+- Executes real market orders via ccxt (USDT-M futures, 5x isolated leverage)
 - Requires typing "YES" to confirm on startup
 - Same risk management, same logging — just real money
-- Spot trading only, no leverage
+- Retry with exponential backoff on network errors (up to 3 attempts)
+- Position reconciliation every 5 ticks (detects ghost/orphan/size mismatches vs exchange)
 
 ### Switching Modes
 ```bash
