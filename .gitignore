@@ -12,3 +12,5 @@ take_screenshot.ps1
 scroll_screenshot.ps1
 crypto-panic.txt
 apikey.txt
+data/historical/
+data/backtest_equity.png
