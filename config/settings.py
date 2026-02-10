@@ -15,10 +15,12 @@ TRADING_TYPE = "future"          # "spot" or "future"
 LEVERAGE = 15                    # 15x leverage for aggressive growth
 MARGIN_TYPE = "ISOLATED"         # ISOLATED — caps loss per position
 
-# Trading pairs (USDT-M futures contracts) — dropped ETH (net loser in all tests)
+# Trading pairs (USDT-M futures contracts) — dropped ETH & 1000PEPE (net losers)
+# Added RENDER and LINK (proven profitable via dynamic pair discovery)
 DEFAULT_PAIRS = [
     "BTC/USDT", "SOL/USDT", "XRP/USDT",
-    "DOGE/USDT", "AVAX/USDT", "SUI/USDT", "1000PEPE/USDT",
+    "DOGE/USDT", "AVAX/USDT", "SUI/USDT",
+    "RENDER/USDT", "LINK/USDT",
 ]
 
 # Timeframes (15m primary, 1h/4h filters — best performing config)
@@ -29,24 +31,24 @@ PRIMARY_TIMEFRAME = "15m"
 BOT_LOOP_INTERVAL_SECONDS = 60   # Check every 60s on 15m timeframe
 
 # Risk management
-MAX_POSITION_PCT = 0.08          # 8% of portfolio per trade (best in Test 2)
+MAX_POSITION_PCT = 0.12          # 12% of portfolio per trade (increased from 8%)
 STOP_LOSS_ATR_MULTIPLIER = 1.5   # 1.5x ATR stop — proven optimal
 REWARD_RISK_RATIO = 2.0          # Fixed 2:1 R:R (hybrid trailing extends beyond this)
 DAILY_LOSS_LIMIT_PCT = 0.12      # Stop trading if down 12% in a day
 MAX_DRAWDOWN_PCT = 0.35          # Circuit breaker at 35% drawdown from peak
-MAX_OPEN_POSITIONS = 3           # Allow 3 concurrent positions
+MAX_OPEN_POSITIONS = 4           # Allow 4 concurrent positions
 
 # Trailing stop system (hybrid — fixed TP activates trailing, best in Test 2)
 TRAILING_STOP_ENABLED = True     # Enable trailing stops
 TRAILING_HYBRID = True           # True = hit fixed TP first, then trail for more
-BREAKEVEN_RR = 1.5               # Move stop to breakeven when R:R reaches 1.5
+BREAKEVEN_RR = 1.0               # Move stop to breakeven when R:R reaches 1.0 (lock profits sooner)
 TRAILING_STOP_ATR_MULTIPLIER = 1.5  # Trail at 1.5x ATR behind extreme
 
 # Dynamic risk controls
 COOLDOWN_BARS = 5                # Wait 5 bars after stop-loss
 MAX_CONSECUTIVE_LOSSES = 2       # After 2 consecutive losses, double cooldown
-MAX_TRADES_PER_HOUR = 2          # Conservative for 15m
-MAX_TRADES_PER_DAY = 12          # Conservative for 15m + 7 pairs
+MAX_TRADES_PER_HOUR = 3          # Increased for 9 pairs
+MAX_TRADES_PER_DAY = 18          # Increased for 9 pairs
 MAX_SAME_DIRECTION_POSITIONS = 1 # 1 long or 1 short at a time
 VOLATILE_REGIME_SIZING = 0.67    # Scale position size to 67% in volatile markets
 
@@ -81,7 +83,7 @@ MIN_SIGNAL_CONFIDENCE = 0.75
 
 # Per-strategy confidence minimums (override MIN_SIGNAL_CONFIDENCE)
 STRATEGY_MIN_CONFIDENCE = {
-    "momentum": 0.85,
+    "momentum": 0.80,              # Lowered from 0.85 — momentum is top earner, allow more trades
     "mean_reversion": 0.72,
     "breakout": 0.70,
 }
