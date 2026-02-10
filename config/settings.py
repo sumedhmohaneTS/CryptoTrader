@@ -103,7 +103,8 @@ PAIR_SCORE_VOLUME_WEIGHT = 0.30
 PAIR_SCORE_MOMENTUM_WEIGHT = 0.30
 
 # Dynamic pair discovery (live API scanning)
-DYNAMIC_PAIR_DISCOVERY = True             # True = scan Binance API, False = use PAIR_UNIVERSE
+ENABLE_PAIR_ROTATION = False              # Disabled — rotation hurts on 15m (Test 5: -2.89%)
+DYNAMIC_PAIR_DISCOVERY = False            # If rotation enabled: True = scan API, False = use PAIR_UNIVERSE
 MIN_VOLUME_USDT = 10_000_000             # $10M min 24h volume for pre-filter
 MAX_SCAN_CANDIDATES = 50                  # Cap on pairs to fetch OHLCV for (Stage 2)
 PAIR_BLACKLIST = ["ETH/USDT"]             # Never trade these (known losers)

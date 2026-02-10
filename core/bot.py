@@ -147,9 +147,11 @@ class TradingBot:
             total_value, self.portfolio.open_position_count
         )
 
-        # Dynamic pair rotation
-        if (self._tick_counter - self._last_scan_tick) >= self.scan_interval:
-            self._rescan_pairs()
+        # Dynamic pair rotation (disabled when DYNAMIC_PAIR_DISCOVERY is False
+        # and no PAIR_UNIVERSE rotation is wanted — Test 5 showed rotation hurts on 15m)
+        if getattr(settings, "ENABLE_PAIR_ROTATION", False):
+            if (self._tick_counter - self._last_scan_tick) >= self.scan_interval:
+                self._rescan_pairs()
 
         if can_trade:
             # Analyze each pair and look for signals
