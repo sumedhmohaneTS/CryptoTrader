@@ -2,12 +2,14 @@ import asyncio
 import time
 from datetime import datetime, timezone
 
+from analysis.indicators import add_all_indicators
 from config import settings
 from core.exchange import Exchange
 from core.portfolio import Portfolio, Position
 from data.database import Database
 from data.fetcher import DataFetcher
 from data.news import NewsService
+from data.pair_scanner import PairScanner
 from risk.risk_manager import RiskManager
 from strategies.base import Signal
 from strategies.strategy_manager import StrategyManager
@@ -34,6 +36,12 @@ class TradingBot:
         self.news_service = NewsService()
         self.db = Database()
         self._tick_counter = 0  # Monotonic bar counter for cooldown tracking
+
+        # Dynamic pair rotation
+        self.pair_scanner = PairScanner()
+        self.scan_interval = getattr(settings, "SCAN_INTERVAL_BARS", 16)
+        self._last_scan_tick = -self.scan_interval  # Force scan on first tick
+        self._configured_symbols: set[str] = set(self.pairs)  # Symbols with leverage/margin set
 
     async def start(self):
         await self.db.connect()
@@ -139,6 +147,10 @@ class TradingBot:
             total_value, self.portfolio.open_position_count
         )
 
+        # Dynamic pair rotation
+        if (self._tick_counter - self._last_scan_tick) >= self.scan_interval:
+            self._rescan_pairs()
+
         if can_trade:
             # Analyze each pair and look for signals
             for symbol in self.pairs:
@@ -172,11 +184,69 @@ class TradingBot:
 
     def _get_current_prices(self) -> dict[str, float]:
         prices = {}
-        for symbol in self.pairs:
+        # Include active pairs + any symbols with open positions (may have been rotated out)
+        symbols = set(self.pairs) | set(self.portfolio.positions.keys())
+        for symbol in symbols:
             price = self.exchange.get_current_price(symbol)
             if price > 0:
                 prices[symbol] = price
         return prices
+
+    def _rescan_pairs(self):
+        """Rescan the market and rotate active pairs."""
+        self._last_scan_tick = self._tick_counter
+
+        dynamic_discovery = getattr(settings, "DYNAMIC_PAIR_DISCOVERY", False)
+
+        if dynamic_discovery:
+            # Stage 1: Fetch all futures tickers and pre-filter by volume
+            tickers = self.exchange.fetch_all_futures_tickers()
+            if not tickers:
+                logger.warning("Pair scan: no tickers returned, keeping current pairs")
+                return
+
+            # Discover candidate universe from live API data
+            candidates = self.pair_scanner.discover_universe(tickers)
+        else:
+            # Fallback: use static universe from config
+            candidates = list(getattr(settings, "PAIR_UNIVERSE", self.pairs))
+
+        # Stage 2: Fetch OHLCV and score each candidate
+        candidate_data: dict = {}
+        for symbol in candidates:
+            try:
+                df = self.fetcher.fetch_ohlcv(
+                    symbol, settings.PRIMARY_TIMEFRAME, limit=100
+                )
+                if not df.empty and len(df) >= settings.EMA_TREND + 10:
+                    df = add_all_indicators(df)
+                    candidate_data[symbol] = df
+            except Exception as e:
+                logger.debug(f"Pair scan: failed to load {symbol}: {e}")
+
+        if not candidate_data:
+            logger.warning("Pair scan: no candidate data, keeping current pairs")
+            return
+
+        new_pairs = self.pair_scanner.select_active_pairs(candidate_data)
+
+        added = set(new_pairs) - set(self.pairs)
+        removed = set(self.pairs) - set(new_pairs)
+
+        # Configure leverage/margin for newly added pairs
+        for symbol in added:
+            if symbol not in self._configured_symbols:
+                self.exchange.setup_symbol(symbol)
+                self._configured_symbols.add(symbol)
+
+        if added or removed:
+            logger.info(
+                f"Pair rotation: +{sorted(added) if added else '[]'} "
+                f"-{sorted(removed) if removed else '[]'} | "
+                f"Active: {new_pairs}"
+            )
+
+        self.pairs = new_pairs
 
     async def _analyze_and_trade(
         self, symbol: str, usdt_balance: float, portfolio_value: float
@@ -291,6 +361,7 @@ class TradingBot:
 
     async def _check_open_positions(self, prices: dict[str, float]):
         symbols_to_close = []
+        trailing_enabled = getattr(settings, "TRAILING_STOP_ENABLED", False)
 
         for symbol, position in self.portfolio.positions.items():
             current_price = prices.get(symbol, 0)
@@ -306,29 +377,115 @@ class TradingBot:
                 else:
                     position.stop_loss = position.entry_price + 2 * atr_estimate
                     position.take_profit = position.entry_price - 3 * atr_estimate
+                position.initial_risk = abs(position.entry_price - position.stop_loss)
                 logger.info(
                     f"Set recovered SL/TP for {symbol}: SL=${position.stop_loss:.4f} TP=${position.take_profit:.4f}"
                 )
 
             close_reason = ""
+            hybrid = getattr(settings, "TRAILING_HYBRID", False)
 
-            # Check stop-loss
+            # Check stop-loss (always checked first)
             if self.risk_manager.check_stop_loss(
                 position.entry_price, position.stop_loss, current_price, position.side
             ):
-                close_reason = "stop_loss"
+                close_reason = "trailing_stop" if position.trailing_activated else "stop_loss"
 
             # Check take-profit
             elif self.risk_manager.check_take_profit(
                 position.entry_price, position.take_profit, current_price, position.side
             ):
-                close_reason = "take_profit"
+                if trailing_enabled and hybrid and not position.trailing_activated:
+                    # Hybrid mode: TP hit activates trailing instead of closing
+                    position.trailing_activated = True
+                    position.stop_loss = position.take_profit  # Lock in TP as new floor
+                    if position.side == "buy":
+                        position.highest_price = max(position.highest_price, current_price)
+                    else:
+                        position.lowest_price = min(position.lowest_price, current_price)
+                    logger.info(
+                        f"HYBRID TRAIL {position.symbol}: TP hit, trailing activated "
+                        f"(SL → ${position.stop_loss:.4f})"
+                    )
+                elif not trailing_enabled or not hybrid:
+                    close_reason = "take_profit"
 
             if close_reason:
                 symbols_to_close.append((symbol, current_price, close_reason))
+            elif trailing_enabled:
+                # Update trailing stop (only if not closing this tick)
+                self._update_trailing_stop(position, current_price)
 
         for symbol, close_price, reason in symbols_to_close:
             await self._close_position(symbol, close_price, reason)
+
+    def _update_trailing_stop(self, position: Position, current_price: float):
+        """Update trailing stop: track extreme, trigger breakeven, trail the stop."""
+        breakeven_rr = getattr(settings, "BREAKEVEN_RR", 1.5)
+        trail_mult = getattr(settings, "TRAILING_STOP_ATR_MULTIPLIER", 1.0)
+        sl_mult = getattr(settings, "STOP_LOSS_ATR_MULTIPLIER", 0.75)
+
+        # Derive trail distance from initial risk
+        # initial_risk = SL_MULT * ATR, so ATR = initial_risk / SL_MULT
+        # trail_distance = TRAIL_MULT * ATR = initial_risk * (TRAIL_MULT / SL_MULT)
+        if position.initial_risk <= 0 or sl_mult <= 0:
+            return
+        trail_distance = position.initial_risk * (trail_mult / sl_mult)
+
+        if position.side == "buy":
+            # Update highest price
+            if current_price > position.highest_price:
+                position.highest_price = current_price
+
+            # Check breakeven trigger
+            profit = position.highest_price - position.entry_price
+            if not position.trailing_activated and profit >= breakeven_rr * position.initial_risk:
+                position.trailing_activated = True
+                old_sl = position.stop_loss
+                position.stop_loss = max(position.stop_loss, position.entry_price)
+                logger.info(
+                    f"TRAILING {position.symbol}: breakeven activated "
+                    f"(SL ${old_sl:.4f} → ${position.stop_loss:.4f})"
+                )
+
+            # Trail the stop
+            if position.trailing_activated:
+                new_stop = position.highest_price - trail_distance
+                if new_stop > position.stop_loss:
+                    old_sl = position.stop_loss
+                    position.stop_loss = new_stop
+                    logger.info(
+                        f"TRAILING {position.symbol}: SL raised "
+                        f"${old_sl:.4f} → ${position.stop_loss:.4f} "
+                        f"(high: ${position.highest_price:.4f})"
+                    )
+        else:
+            # Short position: update lowest price
+            if current_price < position.lowest_price:
+                position.lowest_price = current_price
+
+            # Check breakeven trigger
+            profit = position.entry_price - position.lowest_price
+            if not position.trailing_activated and profit >= breakeven_rr * position.initial_risk:
+                position.trailing_activated = True
+                old_sl = position.stop_loss
+                position.stop_loss = min(position.stop_loss, position.entry_price)
+                logger.info(
+                    f"TRAILING {position.symbol}: breakeven activated "
+                    f"(SL ${old_sl:.4f} → ${position.stop_loss:.4f})"
+                )
+
+            # Trail the stop
+            if position.trailing_activated:
+                new_stop = position.lowest_price + trail_distance
+                if new_stop < position.stop_loss:
+                    old_sl = position.stop_loss
+                    position.stop_loss = new_stop
+                    logger.info(
+                        f"TRAILING {position.symbol}: SL lowered "
+                        f"${old_sl:.4f} → ${position.stop_loss:.4f} "
+                        f"(low: ${position.lowest_price:.4f})"
+                    )
 
     async def _close_position(self, symbol: str, close_price: float, reason: str):
         position = self.portfolio.get_position(symbol)
@@ -359,7 +516,7 @@ class TradingBot:
             # Register with risk manager for cooldown tracking
             if reason == "stop_loss":
                 self.risk_manager.register_stop_loss(symbol, self._tick_counter)
-            elif reason == "take_profit":
+            elif reason in ("take_profit", "trailing_stop"):
                 self.risk_manager.register_win()
 
             emoji = "+" if pnl >= 0 else ""

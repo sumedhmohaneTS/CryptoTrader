@@ -1,16 +1,48 @@
+# Secrets & credentials
 .env
+apikey.txt
+crypto-panic.txt
+
+# Python
 __pycache__/
 *.pyc
+*.pyo
+*.egg-info/
+dist/
+build/
+*.egg
+
+# Database
 data/trades.db
 data/trades.db-wal
 data/trades.db-shm
+
+# Bot runtime files
 data/bot.pid
 data/bot.stop
+
+# Logs
 *.log
+
+# Historical data & backtest output
+data/historical/
+data/backtest_equity.png
+
+# Screenshots & scripts
 screenshot*.png
 take_screenshot.ps1
 scroll_screenshot.ps1
-crypto-panic.txt
-apikey.txt
-data/historical/
-data/backtest_equity.png
+
+# IDE / editor
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS files
+nul
+Thumbs.db
+.DS_Store
+
+# Claude Code
+.claude/

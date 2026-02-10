@@ -49,6 +49,7 @@ class BacktestResult:
     start_date: str = ""
     end_date: str = ""
     symbols: list[str] = field(default_factory=list)
+    pair_rotations: list[dict] = field(default_factory=list)
 
 
 class BacktestEngine:
@@ -71,8 +72,17 @@ class BacktestEngine:
         start_date: str = "2025-11-01",
         end_date: str = "2026-02-01",
         initial_balance: float = 100.0,
+        dynamic_pairs: bool = False,
     ):
-        self.symbols = symbols or settings.DEFAULT_PAIRS
+        self.dynamic_pairs = dynamic_pairs
+        if dynamic_pairs:
+            self.universe = list(getattr(settings, "PAIR_UNIVERSE", []))
+            self.symbols = self.universe  # Load data for all universe pairs
+            self.active_pairs = list(getattr(settings, "CORE_PAIRS", []))
+        else:
+            self.symbols = symbols or settings.DEFAULT_PAIRS
+            self.active_pairs = list(self.symbols)
+
         self.start_date = start_date
         self.end_date = end_date
         self.initial_balance = initial_balance
@@ -87,6 +97,15 @@ class BacktestEngine:
         self.trade_counter = 0
         self.closed_trades: list[ClosedTrade] = []
         self.equity_curve: list[dict] = []
+        self._pair_rotations: list[dict] = []
+
+        # Pair scanner (only if dynamic)
+        self.pair_scanner = None
+        if dynamic_pairs:
+            from data.pair_scanner import PairScanner
+            self.pair_scanner = PairScanner()
+        self.scan_interval = getattr(settings, "SCAN_INTERVAL_BARS", 48)
+        self.last_scan_bar = -self.scan_interval  # Force scan at bar 0
 
         # Data
         self.data_loader = DataLoader()
@@ -123,7 +142,14 @@ class BacktestEngine:
         current_day = None
 
         # Step 4: Bar-by-bar simulation
+        total_bars = len(timeline)
         for bar_idx, timestamp in enumerate(timeline):
+            if bar_idx % 1000 == 0:
+                pct = bar_idx / total_bars * 100
+                print(f"  Progress: {bar_idx}/{total_bars} bars ({pct:.0f}%) | "
+                      f"Trades: {len(self.closed_trades)} | "
+                      f"Balance: ${self._calculate_portfolio_value(timestamp):.2f}",
+                      flush=True)
             # -- Daily reset --
             bar_day = timestamp.date() if hasattr(timestamp, 'date') else pd.Timestamp(timestamp).date()
             if current_day is None:
@@ -145,9 +171,13 @@ class BacktestEngine:
                 portfolio_value, self.portfolio.open_position_count
             )
 
+            # -- Dynamic pair rescan --
+            if self.dynamic_pairs and (bar_idx - self.last_scan_bar) >= self.scan_interval:
+                self._rescan_pairs(timestamp, bar_idx)
+
             # -- Look for new signals --
             if can_trade:
-                for symbol in self.symbols:
+                for symbol in self.active_pairs:
                     if self.portfolio.has_position(symbol):
                         continue
                     self._analyze_and_trade(symbol, timestamp, bar_idx, portfolio_value)
@@ -219,14 +249,17 @@ class BacktestEngine:
             # Filter to candles at or before the current timestamp
             mask = df.index <= timestamp
             filtered = df[mask]
-            if not filtered.empty and len(filtered) >= 50:
-                higher_tf[tf] = filtered.tail(100).copy()
+            min_htf_bars = max(settings.EMA_TREND, settings.ADX_PERIOD * 2) + 10
+            if not filtered.empty and len(filtered) >= min_htf_bars:
+                higher_tf[tf] = filtered.tail(200).copy()
         return higher_tf
 
     def _get_current_prices(self, timestamp) -> dict[str, float]:
-        """Get the close price at timestamp for all symbols."""
+        """Get the close price at timestamp for all symbols with data."""
         prices = {}
-        for symbol in self.symbols:
+        # Include all symbols we have data for (positions may exist on deactivated pairs)
+        symbols_to_check = set(self.symbols) | set(self.portfolio.positions.keys())
+        for symbol in symbols_to_check:
             candle = self._get_candle(symbol, timestamp)
             if candle is not None:
                 prices[symbol] = candle["close"]
@@ -238,8 +271,11 @@ class BacktestEngine:
         return self.portfolio.calculate_portfolio_value(self.balance, prices)
 
     def _check_exits(self, timestamp, bar_index: int = 0):
-        """Check all open positions for stop-loss or take-profit hits."""
+        """Check all open positions for stop-loss, take-profit, or trailing stop hits."""
         symbols_to_close = []
+        trailing_enabled = getattr(settings, "TRAILING_STOP_ENABLED", False)
+
+        hybrid = getattr(settings, "TRAILING_HYBRID", False)
 
         for symbol, position in self.portfolio.positions.items():
             candle = self._get_candle(symbol, timestamp)
@@ -250,29 +286,115 @@ class BacktestEngine:
             exit_reason = None
 
             if position.side == "buy":
-                # Check stop-loss first (worst case)
+                # Check stop-loss first using CURRENT stop level (worst case)
                 if candle["low"] <= position.stop_loss:
                     exit_price = position.stop_loss
-                    exit_reason = "stop_loss"
+                    exit_reason = "trailing_stop" if position.trailing_activated else "stop_loss"
                 # Check take-profit
                 elif candle["high"] >= position.take_profit:
-                    exit_price = position.take_profit
-                    exit_reason = "take_profit"
+                    if trailing_enabled and hybrid and not position.trailing_activated:
+                        # Hybrid: TP hit activates trailing
+                        position.trailing_activated = True
+                        position.stop_loss = position.take_profit
+                        position.highest_price = max(position.highest_price, candle["high"])
+                    elif not trailing_enabled or not hybrid:
+                        exit_price = position.take_profit
+                        exit_reason = "take_profit"
             else:  # sell/short
-                # Check stop-loss (price going up)
                 if candle["high"] >= position.stop_loss:
                     exit_price = position.stop_loss
-                    exit_reason = "stop_loss"
-                # Check take-profit (price going down)
+                    exit_reason = "trailing_stop" if position.trailing_activated else "stop_loss"
                 elif candle["low"] <= position.take_profit:
-                    exit_price = position.take_profit
-                    exit_reason = "take_profit"
+                    if trailing_enabled and hybrid and not position.trailing_activated:
+                        position.trailing_activated = True
+                        position.stop_loss = position.take_profit
+                        position.lowest_price = min(position.lowest_price, candle["low"])
+                    elif not trailing_enabled or not hybrid:
+                        exit_price = position.take_profit
+                        exit_reason = "take_profit"
 
             if exit_price is not None:
                 symbols_to_close.append((symbol, exit_price, exit_reason, timestamp))
+            elif trailing_enabled:
+                # Not stopped out this bar — update trailing for next bar
+                self._update_trailing_stop(position, candle)
 
         for symbol, exit_price, exit_reason, ts in symbols_to_close:
             self._close_position(symbol, exit_price, exit_reason, ts, bar_index)
+
+    def _update_trailing_stop(self, position: Position, candle: pd.Series):
+        """Update trailing stop using candle high/low (backtest version)."""
+        breakeven_rr = getattr(settings, "BREAKEVEN_RR", 1.5)
+        trail_mult = getattr(settings, "TRAILING_STOP_ATR_MULTIPLIER", 1.0)
+        sl_mult = getattr(settings, "STOP_LOSS_ATR_MULTIPLIER", 0.75)
+
+        if position.initial_risk <= 0 or sl_mult <= 0:
+            return
+        trail_distance = position.initial_risk * (trail_mult / sl_mult)
+
+        if position.side == "buy":
+            # Update highest price from candle high
+            if candle["high"] > position.highest_price:
+                position.highest_price = candle["high"]
+
+            profit = position.highest_price - position.entry_price
+            if not position.trailing_activated and profit >= breakeven_rr * position.initial_risk:
+                position.trailing_activated = True
+                position.stop_loss = max(position.stop_loss, position.entry_price)
+
+            if position.trailing_activated:
+                new_stop = position.highest_price - trail_distance
+                if new_stop > position.stop_loss:
+                    position.stop_loss = new_stop
+        else:
+            # Update lowest price from candle low
+            if candle["low"] < position.lowest_price:
+                position.lowest_price = candle["low"]
+
+            profit = position.entry_price - position.lowest_price
+            if not position.trailing_activated and profit >= breakeven_rr * position.initial_risk:
+                position.trailing_activated = True
+                position.stop_loss = min(position.stop_loss, position.entry_price)
+
+            if position.trailing_activated:
+                new_stop = position.lowest_price + trail_distance
+                if new_stop < position.stop_loss:
+                    position.stop_loss = new_stop
+
+    def _rescan_pairs(self, timestamp, bar_idx: int):
+        """Rescan universe and update active pairs list."""
+        self.last_scan_bar = bar_idx
+
+        # Build indicator snapshots for all universe pairs at this timestamp
+        universe_data = {}
+        for symbol in self.universe:
+            df = self._get_indicator_window(symbol, timestamp)
+            if not df.empty and len(df) >= settings.EMA_TREND + 10:
+                universe_data[symbol] = df
+
+        if not universe_data:
+            return
+
+        new_active = self.pair_scanner.select_active_pairs(universe_data)
+
+        added = set(new_active) - set(self.active_pairs)
+        removed = set(self.active_pairs) - set(new_active)
+
+        if added or removed:
+            print(f"  Pair rotation at bar {bar_idx}: "
+                  f"+{sorted(added) if added else '[]'} "
+                  f"-{sorted(removed) if removed else '[]'}",
+                  flush=True)
+
+        self._pair_rotations.append({
+            "bar_idx": bar_idx,
+            "timestamp": timestamp,
+            "active": list(new_active),
+            "added": sorted(added),
+            "removed": sorted(removed),
+        })
+
+        self.active_pairs = new_active
 
     def _close_position(self, symbol: str, exit_price: float, reason: str, timestamp, bar_index: int = 0):
         """Close a position and record the trade."""
@@ -283,7 +405,7 @@ class BacktestEngine:
         # Register stop-loss/win with risk manager for cooldown tracking
         if reason == "stop_loss":
             self.risk_manager.register_stop_loss(symbol, bar_index)
-        elif reason == "take_profit":
+        elif reason in ("take_profit", "trailing_stop"):
             self.risk_manager.register_win()
 
         # Apply slippage to exit
@@ -347,7 +469,10 @@ class BacktestEngine:
 
         # Get indicator window (last 200 bars)
         df = self._get_indicator_window(symbol, timestamp)
-        if df.empty or len(df) < 50:
+        # Need enough bars for the largest indicator (ADX needs ~2x period, S/R needs lookback)
+        min_bars = max(settings.ADX_PERIOD * 2, settings.EMA_TREND,
+                       getattr(settings, "SR_LOOKBACK", 50)) + 10
+        if df.empty or len(df) < min_bars:
             return  # Not enough data for indicators
 
         # Get higher timeframe data for MTF filter
@@ -440,5 +565,6 @@ class BacktestEngine:
             final_balance=final_value,
             start_date=self.start_date,
             end_date=self.end_date,
-            symbols=self.symbols,
+            symbols=self.active_pairs if self.dynamic_pairs else self.symbols,
+            pair_rotations=self._pair_rotations,
         )

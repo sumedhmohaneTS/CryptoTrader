@@ -41,21 +41,26 @@ class Exchange:
         self._exchange.has["fetchCurrencies"] = False
         self._exchange.load_markets()
         for symbol in settings.DEFAULT_PAIRS:
-            try:
-                self._exchange.set_leverage(settings.LEVERAGE, symbol)
-                logger.info(f"Set {symbol} leverage to {settings.LEVERAGE}x")
-            except Exception as e:
-                logger.warning(f"Failed to set leverage for {symbol}: {e}")
+            self.setup_symbol(symbol)
 
-            try:
-                self._exchange.set_margin_mode(
-                    settings.MARGIN_TYPE.lower(), symbol
-                )
-                logger.info(f"Set {symbol} margin to {settings.MARGIN_TYPE}")
-            except Exception as e:
-                # "No need to change margin type" is expected if already set
-                if "No need to change" not in str(e):
-                    logger.warning(f"Failed to set margin type for {symbol}: {e}")
+    def setup_symbol(self, symbol: str):
+        """Set leverage and margin type for a single symbol."""
+        if self.mode != "live" or not self._exchange:
+            return
+        try:
+            self._exchange.set_leverage(settings.LEVERAGE, symbol)
+            logger.info(f"Set {symbol} leverage to {settings.LEVERAGE}x")
+        except Exception as e:
+            if "No need to change" not in str(e):
+                logger.warning(f"Failed to set leverage for {symbol}: {e}")
+        try:
+            self._exchange.set_margin_mode(
+                settings.MARGIN_TYPE.lower(), symbol
+            )
+            logger.info(f"Set {symbol} margin to {settings.MARGIN_TYPE}")
+        except Exception as e:
+            if "No need to change" not in str(e):
+                logger.warning(f"Failed to set margin type for {symbol}: {e}")
 
     # ------------------------------------------------------------------
     # Retry helper
@@ -313,6 +318,61 @@ class Exchange:
         except Exception as e:
             logger.error(f"Failed to fetch price for {symbol}: {e}")
             return 0.0
+
+    # ------------------------------------------------------------------
+    # Market scanning
+    # ------------------------------------------------------------------
+
+    def fetch_all_futures_tickers(
+        self, min_volume_usdt: float | None = None
+    ) -> list[dict]:
+        """
+        Fetch all USDT-M futures tickers and pre-filter by 24h volume.
+        Returns list of {symbol, volume_24h, price_change_pct, last_price},
+        sorted by volume descending.
+        """
+        if min_volume_usdt is None:
+            min_volume_usdt = getattr(settings, "MIN_VOLUME_USDT", 10_000_000)
+
+        exchange = self._exchange or ccxt.binance({
+            "enableRateLimit": True,
+            "options": {"defaultType": "future"},
+        })
+
+        try:
+            tickers = exchange.fetch_tickers()
+        except Exception as e:
+            logger.error(f"Failed to fetch tickers: {e}")
+            return []
+
+        # CCXT futures symbols are "BTC/USDT:USDT" — normalize to "BTC/USDT"
+        EXCLUDE = {"USDC/USDT", "BUSD/USDT", "TUSD/USDT", "FDUSD/USDT", "DAI/USDT"}
+        blacklist = set(getattr(settings, "PAIR_BLACKLIST", []))
+
+        results = []
+        for symbol, t in tickers.items():
+            # Match USDT-settled futures: "XXX/USDT:USDT"
+            if not symbol.endswith("/USDT:USDT"):
+                continue
+            # Normalize to "XXX/USDT" format used by the rest of the codebase
+            normalized = symbol.replace(":USDT", "")
+            if normalized in EXCLUDE or normalized in blacklist:
+                continue
+            quote_vol = float(t.get("quoteVolume", 0) or 0)
+            if quote_vol < min_volume_usdt:
+                continue
+            results.append({
+                "symbol": normalized,
+                "volume_24h": quote_vol,
+                "price_change_pct": float(t.get("percentage", 0) or 0),
+                "last_price": float(t.get("last", 0) or 0),
+            })
+
+        results.sort(key=lambda x: x["volume_24h"], reverse=True)
+        logger.info(
+            f"Ticker scan: {len(results)} pairs above ${min_volume_usdt/1e6:.0f}M volume"
+        )
+        return results
 
     # ------------------------------------------------------------------
     # Position reconciliation (live mode only)

@@ -108,7 +108,7 @@ class BacktestReporter:
         return max_dd, max_dd_duration
 
     def sharpe_ratio(self) -> float:
-        """Annualized Sharpe ratio from 15m equity returns."""
+        """Annualized Sharpe ratio from equity returns."""
         if len(self.equity_curve) < 2:
             return 0.0
 
@@ -118,8 +118,10 @@ class BacktestReporter:
         if returns.std() == 0:
             return 0.0
 
-        # 15m bars: 4 per hour * 24 hours * 365 days = 35040 bars/year
-        bars_per_year = 4 * 24 * 365
+        from config import settings
+        tf = getattr(settings, "PRIMARY_TIMEFRAME", "15m")
+        tf_minutes = {"1m": 1, "3m": 3, "5m": 5, "15m": 15, "30m": 30, "1h": 60}.get(tf, 15)
+        bars_per_year = int((60 / tf_minutes) * 24 * 365)
         annualized_return = returns.mean() * bars_per_year
         annualized_vol = returns.std() * np.sqrt(bars_per_year)
 
@@ -281,8 +283,38 @@ class BacktestReporter:
                     f"${t.pnl:>+9.4f} {t.exit_reason:<12}"
                 )
 
+        # -- Pair rotation summary --
+        self._print_pair_rotation_summary()
+
         print()
         print("=" * 70)
+
+    def _print_pair_rotation_summary(self):
+        """Print pair rotation analysis if dynamic pairs were used."""
+        rotations = getattr(self.result, "pair_rotations", [])
+        if not rotations:
+            return
+
+        from collections import Counter
+        print()
+        print("-" * 70)
+        print("  PAIR ROTATION SUMMARY")
+        print("-" * 70)
+        print(f"  Total rescans:       {len(rotations)}")
+        total_changes = sum(1 for r in rotations if r.get("added") or r.get("removed"))
+        print(f"  Rotations with changes: {total_changes}")
+
+        pair_counts = Counter()
+        for r in rotations:
+            for p in r["active"]:
+                pair_counts[p] += 1
+
+        print()
+        print(f"  {'Pair':<20} {'Times Active':>12} {'% of Scans':>12}")
+        print(f"  {'-'*20} {'-'*12} {'-'*12}")
+        for pair, count in pair_counts.most_common():
+            pct = count / len(rotations) * 100
+            print(f"  {pair:<20} {count:>12} {pct:>11.1f}%")
 
     def plot_equity_curve(self, save_path: str | None = None):
         """Save equity curve as a PNG image."""

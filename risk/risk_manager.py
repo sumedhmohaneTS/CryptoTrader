@@ -63,8 +63,10 @@ class RiskManager:
 
     def check_trade_frequency(self, bar_index: int) -> bool:
         """Return True if trade frequency cap is exceeded (should block trade)."""
-        # Each hour = 4 bars on 15m TF
-        bars_per_hour = 4
+        # Derive bars per hour from primary timeframe
+        tf = getattr(settings, "PRIMARY_TIMEFRAME", "15m")
+        tf_minutes = {"1m": 1, "3m": 3, "5m": 5, "15m": 15, "30m": 30, "1h": 60}.get(tf, 15)
+        bars_per_hour = max(1, 60 // tf_minutes)
         if bar_index - self._hour_start_bar >= bars_per_hour:
             self._hour_start_bar = bar_index
             self._trades_this_hour = 0
@@ -226,10 +228,10 @@ class RiskManager:
             logger.warning("No valid stop-loss, rejecting signal")
             return False
 
-        # Verify R:R ratio
+        # Verify R:R ratio (small epsilon to avoid floating-point rejection)
         risk = abs(signal.entry_price - signal.stop_loss)
         reward = abs(signal.take_profit - signal.entry_price)
-        if risk > 0 and reward / risk < settings.REWARD_RISK_RATIO:
+        if risk > 0 and reward / risk < settings.REWARD_RISK_RATIO - 0.01:
             logger.info(f"R:R ratio too low: {reward/risk:.2f}")
             return False
 

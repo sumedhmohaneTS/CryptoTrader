@@ -20,7 +20,7 @@ from backtest.reporter import BacktestReporter
 def _quiet_loggers():
     """Suppress per-bar strategy/indicator logs during backtest."""
     for name in ["strategy_manager", "market_analyzer", "risk_manager",
-                 "portfolio", "backtest_engine"]:
+                 "portfolio", "backtest_engine", "pair_scanner"]:
         logger = logging.getLogger(name)
         logger.setLevel(logging.CRITICAL)
         for handler in logger.handlers:
@@ -54,6 +54,10 @@ Examples:
         "--walk-forward", action="store_true", dest="walk_forward",
         help="Run walk-forward validation instead of a single backtest",
     )
+    parser.add_argument(
+        "--dynamic-pairs", action="store_true", dest="dynamic_pairs",
+        help="Enable dynamic pair rotation (scan universe, select trending pairs)",
+    )
     args = parser.parse_args()
 
     print()
@@ -64,6 +68,8 @@ Examples:
     print(f"  Balance: ${args.balance:.2f}")
     if args.walk_forward:
         print("  Mode:    Walk-Forward Validation")
+    if args.dynamic_pairs:
+        print("  Mode:    Dynamic Pair Rotation")
     print()
 
     _quiet_loggers()
@@ -84,6 +90,7 @@ Examples:
             start_date=args.start,
             end_date=args.end,
             initial_balance=args.balance,
+            dynamic_pairs=args.dynamic_pairs,
         )
 
         # 2. Run backtest

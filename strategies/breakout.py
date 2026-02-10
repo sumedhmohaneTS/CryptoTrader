@@ -14,7 +14,8 @@ class BreakoutStrategy(BaseStrategy):
     def analyze(self, df: pd.DataFrame, symbol: str) -> TradeSignal:
         df = add_all_indicators(df)
 
-        if len(df) < 60:
+        min_bars = max(settings.EMA_TREND, getattr(settings, "SR_LOOKBACK", 50)) + 5
+        if len(df) < min_bars:
             return self._hold(symbol, df)
 
         latest = df.iloc[-1]

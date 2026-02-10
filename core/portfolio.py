@@ -17,6 +17,22 @@ class Position:
     strategy: str
     confidence: float
 
+    # Trailing stop fields
+    initial_risk: float = 0.0           # abs(entry - initial stop), set at open
+    highest_price: float = 0.0          # Best price since entry (for longs)
+    lowest_price: float = 0.0           # Best price since entry (for shorts)
+    trailing_activated: bool = False     # True once breakeven trigger hit
+
+    def __post_init__(self):
+        # Auto-compute initial_risk if not provided
+        if self.initial_risk == 0.0 and self.stop_loss > 0:
+            self.initial_risk = abs(self.entry_price - self.stop_loss)
+        # Initialize extreme price tracking
+        if self.highest_price == 0.0:
+            self.highest_price = self.entry_price
+        if self.lowest_price == 0.0:
+            self.lowest_price = self.entry_price
+
     @property
     def cost(self) -> float:
         return self.entry_price * self.quantity

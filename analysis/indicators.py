@@ -65,15 +65,17 @@ def add_obv(df: pd.DataFrame) -> pd.DataFrame:
     direction = np.where(df["close"] > df["close"].shift(1), 1,
                 np.where(df["close"] < df["close"].shift(1), -1, 0))
     df["obv"] = (df["volume"] * direction).cumsum()
-    df["obv_ema"] = EMAIndicator(df["obv"].fillna(0), window=13).ema_indicator()
+    df["obv_ema"] = EMAIndicator(df["obv"].fillna(0), window=settings.OBV_EMA_PERIOD).ema_indicator()
     return df
 
 
-def detect_rsi_divergence(df: pd.DataFrame, lookback: int = 20) -> str:
+def detect_rsi_divergence(df: pd.DataFrame, lookback: int | None = None) -> str:
     """
     Detect RSI divergence with price.
     Returns: "bullish", "bearish", or "none"
     """
+    if lookback is None:
+        lookback = getattr(settings, "DIVERGENCE_LOOKBACK", 20)
     if len(df) < lookback or "rsi" not in df.columns:
         return "none"
 
@@ -105,11 +107,13 @@ def detect_rsi_divergence(df: pd.DataFrame, lookback: int = 20) -> str:
     return "none"
 
 
-def detect_macd_divergence(df: pd.DataFrame, lookback: int = 20) -> str:
+def detect_macd_divergence(df: pd.DataFrame, lookback: int | None = None) -> str:
     """
     Detect MACD histogram divergence with price.
     Returns: "bullish", "bearish", or "none"
     """
+    if lookback is None:
+        lookback = getattr(settings, "DIVERGENCE_LOOKBACK", 20)
     hist_col = f"MACDh_{settings.MACD_FAST}_{settings.MACD_SLOW}_{settings.MACD_SIGNAL}"
     if len(df) < lookback or hist_col not in df.columns:
         return "none"
@@ -146,7 +150,8 @@ def get_higher_tf_trend(df: pd.DataFrame) -> str:
     Determine trend from a higher timeframe DataFrame.
     Returns: "bullish", "bearish", or "neutral"
     """
-    if df.empty or len(df) < 21:
+    min_bars = max(settings.EMA_TREND, settings.ADX_PERIOD * 2) + 10
+    if df.empty or len(df) < min_bars:
         return "neutral"
 
     df = add_ema(df)
@@ -170,8 +175,10 @@ def get_higher_tf_trend(df: pd.DataFrame) -> str:
 
 
 def find_support_resistance(
-    df: pd.DataFrame, lookback: int = 50, num_levels: int = 3
+    df: pd.DataFrame, lookback: int | None = None, num_levels: int = 3
 ) -> tuple[list[float], list[float]]:
+    if lookback is None:
+        lookback = getattr(settings, "SR_LOOKBACK", 50)
     if len(df) < lookback:
         return [], []
 
