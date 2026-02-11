@@ -37,6 +37,20 @@ class TradingBot:
         self.db = Database()
         self._tick_counter = 0  # Monotonic bar counter for cooldown tracking
 
+        # Adaptive regime system
+        self.adaptive_tracker = None
+        self.adaptive_controller = None
+        if getattr(settings, "ADAPTIVE_ENABLED", False):
+            from adaptive.performance_tracker import PerformanceTracker
+            from adaptive.adaptive_controller import AdaptiveController
+            lookback = getattr(settings, "ADAPTIVE_LOOKBACK_TRADES", 30)
+            min_trades = getattr(settings, "ADAPTIVE_MIN_TRADES", 8)
+            self.adaptive_tracker = PerformanceTracker(lookback, min_trades)
+            self.adaptive_controller = AdaptiveController(self.adaptive_tracker)
+            self._adaptive_log_interval = getattr(settings, "ADAPTIVE_LOG_INTERVAL_BARS", 16)
+            self._last_adaptive_log_tick = 0
+            logger.info("Adaptive regime system ENABLED")
+
         # Dynamic pair rotation
         self.pair_scanner = PairScanner()
         self.smart_selector = None
@@ -185,6 +199,14 @@ class TradingBot:
             positions_value=self.portfolio.get_positions_value(prices),
             open_positions=self.portfolio.open_position_count,
         )
+
+        # Log adaptive state periodically
+        if self.adaptive_controller is not None:
+            if (self._tick_counter - self._last_adaptive_log_tick) >= self._adaptive_log_interval:
+                self._last_adaptive_log_tick = self._tick_counter
+                overrides = self.adaptive_controller.compute_overrides()
+                state_str = self.adaptive_controller.format_state(overrides)
+                logger.info(state_str)
 
         # Log summary
         summary = self.portfolio.get_summary(usdt_balance, prices)
@@ -374,9 +396,43 @@ class TradingBot:
                 confidence=signal.confidence,
             )
 
-            # Validate signal through risk manager
-            if not self.risk_manager.validate_signal(signal):
-                return
+            # --- Adaptive overrides ---
+            overrides = None
+            if self.adaptive_controller is not None:
+                overrides = self.adaptive_controller.compute_overrides()
+
+                # Check if strategy is disabled
+                if not overrides.strategy_enabled.get(signal.strategy, True):
+                    return
+
+            # Validate signal (with adaptive confidence + R:R if active)
+            if overrides is not None:
+                adaptive_conf = overrides.min_confidence.get(signal.strategy, settings.MIN_SIGNAL_CONFIDENCE)
+                if signal.signal == Signal.HOLD:
+                    return
+                if signal.confidence < adaptive_conf:
+                    return
+                if signal.stop_loss <= 0:
+                    return
+
+                risk = abs(signal.entry_price - signal.stop_loss)
+                reward = abs(signal.take_profit - signal.entry_price)
+                if risk > 0 and reward / risk < overrides.rr_ratio - 0.01:
+                    return
+
+                # Rebuild SL/TP with adaptive ATR multiplier if changed
+                if abs(overrides.sl_atr_multiplier - settings.STOP_LOSS_ATR_MULTIPLIER) > 0.01:
+                    atr_scale = overrides.sl_atr_multiplier / settings.STOP_LOSS_ATR_MULTIPLIER
+                    new_risk = risk * atr_scale
+                    if signal.signal == Signal.BUY:
+                        signal.stop_loss = signal.entry_price - new_risk
+                        signal.take_profit = signal.entry_price + new_risk * overrides.rr_ratio
+                    else:
+                        signal.stop_loss = signal.entry_price + new_risk
+                        signal.take_profit = signal.entry_price - new_risk * overrides.rr_ratio
+            else:
+                if not self.risk_manager.validate_signal(signal):
+                    return
 
             # Check correlation exposure
             side = signal.signal.value.lower()
@@ -390,6 +446,14 @@ class TradingBot:
             )
             if quantity <= 0:
                 return
+
+            # Apply adaptive scaling
+            if overrides is not None:
+                size_scale = overrides.position_size_scale.get(signal.strategy, 1.0)
+                lev_scale = overrides.leverage_scale
+                quantity *= size_scale * lev_scale
+                if quantity <= 0:
+                    return
 
             # Execute trade
             order = self.exchange.place_order(
@@ -593,6 +657,26 @@ class TradingBot:
                 self.risk_manager.register_stop_loss(symbol, self._tick_counter)
             elif reason in ("take_profit", "trailing_stop"):
                 self.risk_manager.register_win()
+
+            # Feed to adaptive tracker
+            if self.adaptive_tracker is not None:
+                from adaptive.performance_tracker import TradeRecord
+                from datetime import datetime, timezone
+                risk_val = abs(position.entry_price - position.stop_loss) * position.quantity
+                reward_val = abs(position.take_profit - position.entry_price) * position.quantity
+                self.adaptive_tracker.record_trade(TradeRecord(
+                    strategy=position.strategy,
+                    symbol=symbol,
+                    side=position.side,
+                    pnl=pnl,
+                    pnl_pct=pnl_pct,
+                    entry_time=datetime.now(timezone.utc),
+                    exit_time=datetime.now(timezone.utc),
+                    exit_reason=reason,
+                    confidence=position.confidence,
+                    risk=risk_val,
+                    reward=reward_val,
+                ))
 
             emoji = "+" if pnl >= 0 else ""
             logger.info(

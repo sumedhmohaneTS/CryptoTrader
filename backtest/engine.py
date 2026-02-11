@@ -50,6 +50,7 @@ class BacktestResult:
     end_date: str = ""
     symbols: list[str] = field(default_factory=list)
     pair_rotations: list[dict] = field(default_factory=list)
+    adaptive_controller: object = None  # AdaptiveController instance (if used)
 
 
 class BacktestEngine:
@@ -73,6 +74,7 @@ class BacktestEngine:
         end_date: str = "2026-02-01",
         initial_balance: float = 100.0,
         dynamic_pairs: bool = False,
+        adaptive: bool = False,
     ):
         self.dynamic_pairs = dynamic_pairs
         if dynamic_pairs:
@@ -113,6 +115,20 @@ class BacktestEngine:
         else:
             self.scan_interval = getattr(settings, "SCAN_INTERVAL_BARS", 48)
         self.last_scan_bar = -self.scan_interval  # Force scan at bar 0
+
+        # Adaptive regime system
+        self.adaptive = adaptive
+        self.adaptive_tracker = None
+        self.adaptive_controller = None
+        if adaptive:
+            from adaptive.performance_tracker import PerformanceTracker
+            from adaptive.adaptive_controller import AdaptiveController
+            lookback = getattr(settings, "ADAPTIVE_LOOKBACK_TRADES", 30)
+            min_trades = getattr(settings, "ADAPTIVE_MIN_TRADES", 8)
+            self.adaptive_tracker = PerformanceTracker(lookback, min_trades)
+            self.adaptive_controller = AdaptiveController(self.adaptive_tracker)
+            self._adaptive_log_interval = getattr(settings, "ADAPTIVE_LOG_INTERVAL_BARS", 16)
+            self._last_adaptive_log_bar = 0
 
         # Data
         self.data_loader = DataLoader()
@@ -189,12 +205,32 @@ class BacktestEngine:
                         continue
                     self._analyze_and_trade(symbol, timestamp, bar_idx, portfolio_value)
 
+            # -- Log adaptive state periodically --
+            if self.adaptive_controller is not None:
+                if (bar_idx - self._last_adaptive_log_bar) >= self._adaptive_log_interval:
+                    self._last_adaptive_log_bar = bar_idx
+                    overrides = self.adaptive_controller.compute_overrides()
+                    state_str = self.adaptive_controller.format_state(overrides)
+                    if bar_idx % 500 == 0:
+                        print(f"  [{bar_idx}] {state_str}", flush=True)
+
             # -- Record equity snapshot (every bar) --
-            self.equity_curve.append({
+            equity_record = {
                 "timestamp": timestamp,
                 "equity": portfolio_value,
                 "positions": self.portfolio.open_position_count,
-            })
+            }
+            if self.adaptive_controller is not None and bar_idx % 96 == 0:
+                overrides = self.adaptive_controller.compute_overrides()
+                equity_record["adaptive"] = {
+                    "leverage_scale": overrides.leverage_scale,
+                    "sl_atr": overrides.sl_atr_multiplier,
+                    "rr_ratio": overrides.rr_ratio,
+                    "enabled": dict(overrides.strategy_enabled),
+                    "confidence": dict(overrides.min_confidence),
+                    "size_scale": dict(overrides.position_size_scale),
+                }
+            self.equity_curve.append(equity_record)
 
         # Close any remaining open positions at last bar's close
         self._close_remaining(timeline[-1])
@@ -497,6 +533,25 @@ class BacktestEngine:
         )
         self.closed_trades.append(trade)
 
+        # Feed to adaptive tracker (skip end-of-backtest force-closes)
+        if self.adaptive_tracker is not None and reason != "end_of_backtest":
+            from adaptive.performance_tracker import TradeRecord
+            risk = abs(position.entry_price - position.stop_loss) * position.quantity
+            reward = abs(position.take_profit - position.entry_price) * position.quantity
+            self.adaptive_tracker.record_trade(TradeRecord(
+                strategy=position.strategy,
+                symbol=symbol,
+                side=position.side,
+                pnl=net_pnl,
+                pnl_pct=pnl_pct,
+                entry_time=getattr(position, "_entry_time", timestamp),
+                exit_time=timestamp,
+                exit_reason=reason,
+                confidence=position.confidence,
+                risk=risk,
+                reward=reward,
+            ))
+
         logger.debug(
             f"CLOSE {position.side.upper()} {symbol} @ {adjusted_exit:.4f} | "
             f"PnL: ${net_pnl:.4f} ({pnl_pct:.2%}) | Reason: {reason}"
@@ -531,9 +586,45 @@ class BacktestEngine:
             news_score=0.0,
         )
 
-        # Validate via risk manager
-        if not self.risk_manager.validate_signal(signal):
-            return
+        # --- Adaptive overrides ---
+        overrides = None
+        if self.adaptive_controller is not None:
+            overrides = self.adaptive_controller.compute_overrides()
+
+            # Check if strategy is disabled
+            if not overrides.strategy_enabled.get(signal.strategy, True):
+                return
+
+        # Validate via risk manager (with adaptive confidence + R:R)
+        if overrides is not None:
+            # Use adaptive confidence threshold
+            adaptive_conf = overrides.min_confidence.get(signal.strategy, settings.MIN_SIGNAL_CONFIDENCE)
+            if signal.signal == Signal.HOLD:
+                return
+            if signal.confidence < adaptive_conf:
+                return
+            if signal.stop_loss <= 0:
+                return
+
+            # Use adaptive R:R ratio
+            risk = abs(signal.entry_price - signal.stop_loss)
+            reward = abs(signal.take_profit - signal.entry_price)
+            if risk > 0 and reward / risk < overrides.rr_ratio - 0.01:
+                return
+
+            # Rebuild SL/TP with adaptive ATR multiplier if different from default
+            if abs(overrides.sl_atr_multiplier - settings.STOP_LOSS_ATR_MULTIPLIER) > 0.01:
+                atr_scale = overrides.sl_atr_multiplier / settings.STOP_LOSS_ATR_MULTIPLIER
+                new_risk = risk * atr_scale
+                if signal.signal == Signal.BUY:
+                    signal.stop_loss = signal.entry_price - new_risk
+                    signal.take_profit = signal.entry_price + new_risk * overrides.rr_ratio
+                else:
+                    signal.stop_loss = signal.entry_price + new_risk
+                    signal.take_profit = signal.entry_price - new_risk * overrides.rr_ratio
+        else:
+            if not self.risk_manager.validate_signal(signal):
+                return
 
         # Check correlation exposure (don't stack same-direction positions)
         side = signal.signal.value.lower()
@@ -547,6 +638,14 @@ class BacktestEngine:
         )
         if quantity <= 0:
             return
+
+        # Apply adaptive scaling to quantity
+        if overrides is not None:
+            size_scale = overrides.position_size_scale.get(signal.strategy, 1.0)
+            lev_scale = overrides.leverage_scale
+            quantity *= size_scale * lev_scale
+            if quantity <= 0:
+                return
 
         # Apply slippage to entry
         if signal.signal == Signal.BUY:
@@ -610,4 +709,5 @@ class BacktestEngine:
             end_date=self.end_date,
             symbols=self.active_pairs if self.dynamic_pairs else self.symbols,
             pair_rotations=self._pair_rotations,
+            adaptive_controller=self.adaptive_controller,
         )

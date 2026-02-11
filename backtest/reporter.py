@@ -286,6 +286,9 @@ class BacktestReporter:
         # -- Pair rotation summary --
         self._print_pair_rotation_summary()
 
+        # -- Adaptive summary --
+        self._print_adaptive_summary()
+
         print()
         print("=" * 70)
 
@@ -315,6 +318,70 @@ class BacktestReporter:
         for pair, count in pair_counts.most_common():
             pct = count / len(rotations) * 100
             print(f"  {pair:<20} {count:>12} {pct:>11.1f}%")
+
+    def _print_adaptive_summary(self):
+        """Print adaptive regime system summary if it was used."""
+        controller = getattr(self.result, "adaptive_controller", None)
+        if controller is None:
+            return
+
+        print()
+        print("-" * 70)
+        print("  ADAPTIVE REGIME SUMMARY")
+        print("-" * 70)
+
+        overrides = controller.compute_overrides()
+        tracker = controller.tracker
+
+        # Per-strategy final state
+        print(f"  {'Strategy':<16} {'Status':>6} {'Conf':>6} {'Size':>6} "
+              f"{'WR':>6} {'PF':>6} {'Trades':>7} {'Streak':>7} {'Trend':>7}")
+        print(f"  {'-'*16} {'-'*6} {'-'*6} {'-'*6} "
+              f"{'-'*6} {'-'*6} {'-'*7} {'-'*7} {'-'*7}")
+
+        for strat in ["momentum", "mean_reversion", "breakout"]:
+            enabled = overrides.strategy_enabled.get(strat, True)
+            conf = overrides.min_confidence.get(strat, 0.0)
+            size = overrides.position_size_scale.get(strat, 1.0)
+            metrics = tracker.get_strategy_metrics(strat)
+            status = "ON" if enabled else "OFF"
+            print(
+                f"  {strat:<16} {status:>6} {conf:>6.2f} {size:>5.2f}x "
+                f"{metrics.win_rate:>5.0%} {metrics.profit_factor:>6.2f} "
+                f"{metrics.trade_count:>7} {metrics.current_streak:>+7d} "
+                f"{metrics.recent_trend:>+7.2f}"
+            )
+
+        # Overall final state
+        overall = tracker.get_overall_metrics()
+        print()
+        print(f"  Overall:  Leverage={overrides.leverage_scale:.2f}x  "
+              f"SL={overrides.sl_atr_multiplier:.2f}  R:R={overrides.rr_ratio:.2f}")
+        print(f"  Overall:  WR={overall.win_rate:.0%}  PF={overall.profit_factor:.2f}  "
+              f"Trades={overall.trade_count}  Trend={overall.recent_trend:+.2f}")
+
+        # Show adaptation timeline from equity curve snapshots
+        adaptive_snapshots = [e for e in self.equity_curve if "adaptive" in e]
+        if adaptive_snapshots:
+            print()
+            print(f"  Adaptation Timeline (sampled every ~24h):")
+            print(f"  {'Time':<20} {'Lev':>5} {'SL':>5} {'R:R':>5} "
+                  f"{'Mom':>6} {'MR':>6} {'BO':>6}")
+            for snap in adaptive_snapshots[:10]:  # First 10 snapshots
+                ts = pd.Timestamp(snap["timestamp"]).strftime("%Y-%m-%d %H:%M")
+                a = snap["adaptive"]
+                mom_s = f"{a['size_scale'].get('momentum', 1.0):.2f}x"
+                mr_s = f"{a['size_scale'].get('mean_reversion', 1.0):.2f}x"
+                bo_s = f"{a['size_scale'].get('breakout', 1.0):.2f}x"
+                if not a["enabled"].get("momentum", True):
+                    mom_s = "OFF"
+                if not a["enabled"].get("mean_reversion", True):
+                    mr_s = "OFF"
+                if not a["enabled"].get("breakout", True):
+                    bo_s = "OFF"
+                print(f"  {ts:<20} {a['leverage_scale']:>5.2f} "
+                      f"{a['sl_atr']:>5.2f} {a['rr_ratio']:>5.2f} "
+                      f"{mom_s:>6} {mr_s:>6} {bo_s:>6}")
 
     def plot_equity_curve(self, save_path: str | None = None):
         """Save equity curve as a PNG image."""

@@ -62,6 +62,10 @@ Examples:
         "--smart-rotation", action="store_true", dest="smart_rotation",
         help="Enable smart pair rotation with hysteresis (requires --dynamic-pairs)",
     )
+    parser.add_argument(
+        "--adaptive", action="store_true",
+        help="Enable adaptive regime system (adjusts confidence, sizing, leverage, SL/TP)",
+    )
     args = parser.parse_args()
 
     print()
@@ -76,6 +80,8 @@ Examples:
         print("  Mode:    Dynamic Pair Rotation")
     if args.smart_rotation:
         print("  Mode:    Smart Pair Rotation (hysteresis)")
+    if args.adaptive:
+        print("  Mode:    Adaptive Regime System")
     print()
 
     _quiet_loggers()
@@ -104,6 +110,7 @@ Examples:
             end_date=args.end,
             initial_balance=args.balance,
             dynamic_pairs=args.dynamic_pairs,
+            adaptive=args.adaptive,
         )
 
         # 2. Run backtest

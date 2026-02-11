@@ -136,3 +136,9 @@ DB_PATH = "data/trades.db"
 # Logging
 LOG_LEVEL = "INFO"
 LOG_FILE = "cryptotrader.log"
+
+# Adaptive regime system
+ADAPTIVE_ENABLED = True                     # Master switch for live bot
+ADAPTIVE_LOOKBACK_TRADES = 50              # Rolling window per strategy (larger = smoother)
+ADAPTIVE_MIN_TRADES = 8                    # Min trades before adaptation kicks in
+ADAPTIVE_LOG_INTERVAL_BARS = 16            # Log adaptive state every 4 hours
