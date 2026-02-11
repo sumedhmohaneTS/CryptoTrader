@@ -179,8 +179,8 @@ class RiskManager:
         conf_range = 1.0 - min_conf
         if conf_range > 0:
             conf_excess = (signal.confidence - min_conf) / conf_range
-            # Scale from 0.30 (bare minimum) to 1.0 (max confidence)
-            scale = 0.30 + 0.70 * max(0.0, min(1.0, conf_excess))
+            # Scale from 0.60 (bare minimum) to 1.0 (max confidence)
+            scale = 0.60 + 0.40 * max(0.0, min(1.0, conf_excess))
         else:
             scale = 1.0
         max_margin *= scale
