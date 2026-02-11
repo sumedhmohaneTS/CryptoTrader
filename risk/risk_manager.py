@@ -123,7 +123,10 @@ class RiskManager:
             if daily_pnl_pct <= -settings.DAILY_LOSS_LIMIT_PCT:
                 self.trading_halted = True
                 self.halt_reason = f"Daily loss limit hit: {daily_pnl_pct:.1%}"
-                logger.error(self.halt_reason)
+                logger.error(
+                    f"{self.halt_reason} | portfolio_value=${portfolio_value:.2f} "
+                    f"daily_start=${self.daily_starting_value:.2f}"
+                )
                 return False
 
         # Max drawdown from peak
