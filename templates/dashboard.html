@@ -128,6 +128,26 @@
         </div>
     </div>
 
+    <!-- Config & Adaptive Status -->
+    <div class="row g-3 mb-3">
+        <div class="col-lg-6">
+            <div class="card h-100">
+                <div class="card-header"><i class="bi bi-gear"></i> Trading Config</div>
+                <div class="card-body" id="config-body">
+                    <div class="text-muted text-center">Loading...</div>
+                </div>
+            </div>
+        </div>
+        <div class="col-lg-6">
+            <div class="card h-100">
+                <div class="card-header"><i class="bi bi-sliders"></i> Adaptive System</div>
+                <div class="card-body" id="adaptive-body">
+                    <div class="text-muted text-center">Loading...</div>
+                </div>
+            </div>
+        </div>
+    </div>
+
     <!-- Open Positions -->
     <div class="card mb-3">
         <div class="card-header"><i class="bi bi-wallet2"></i> Open Positions</div>
@@ -564,6 +584,92 @@ async function loadPerformance() {
         </div>`;
 }
 
+async function loadConfig() {
+    const d = await api('/api/config');
+    if (!d) return;
+
+    // Trading config card
+    const cfgEl = $('config-body');
+    const pairs = (d.pairs || []).map(p => p.replace('/USDT', '')).join(', ');
+    const trailMode = d.trailing_hybrid ? 'Hybrid' : d.trailing_enabled ? 'Pure Trailing' : 'Fixed TP';
+    cfgEl.innerHTML = `
+        <div class="row g-2">
+            <div class="col-6">
+                <small class="text-muted">Leverage</small>
+                <div><strong>${d.leverage}x</strong> Isolated</div>
+            </div>
+            <div class="col-6">
+                <small class="text-muted">Timeframe</small>
+                <div><strong>${d.timeframe}</strong> (1h/4h filter)</div>
+            </div>
+            <div class="col-6">
+                <small class="text-muted">Max Positions</small>
+                <div><strong>${d.max_positions}</strong> @ ${(d.position_size_pct * 100).toFixed(0)}% each</div>
+            </div>
+            <div class="col-6">
+                <small class="text-muted">Stop Loss / R:R</small>
+                <div><strong>${d.stop_loss_atr}x ATR</strong> / ${d.reward_risk}:1</div>
+            </div>
+            <div class="col-6">
+                <small class="text-muted">Trailing Mode</small>
+                <div><strong>${trailMode}</strong> ${d.breakeven_rr ? '(BE @ ' + d.breakeven_rr + ' R:R)' : ''}</div>
+            </div>
+            <div class="col-6">
+                <small class="text-muted">Safety Limits</small>
+                <div>Daily: <strong>${(d.daily_loss_limit * 100).toFixed(0)}%</strong> | CB: <strong>${(d.circuit_breaker * 100).toFixed(0)}%</strong></div>
+            </div>
+            <div class="col-12 mt-1">
+                <small class="text-muted">Confidence</small>
+                <div>Mom: <strong>${(d.confidence.momentum * 100).toFixed(0)}%</strong> | MR: <strong>${(d.confidence.mean_reversion * 100).toFixed(0)}%</strong> | BO: <strong>${(d.confidence.breakout * 100).toFixed(0)}%</strong></div>
+            </div>
+            <div class="col-12 mt-1">
+                <small class="text-muted">Pairs (${(d.pairs || []).length})</small>
+                <div class="small">${pairs}</div>
+            </div>
+        </div>`;
+
+    // Adaptive system card
+    const adEl = $('adaptive-body');
+    if (d.adaptive_enabled) {
+        const state = d.adaptive_state;
+        adEl.innerHTML = `
+            <div class="mb-2">
+                <span class="badge bg-success">ENABLED</span>
+                <span class="text-muted ms-2 small">Overrides applied per-trade in bot loop</span>
+            </div>
+            <div class="row g-2">
+                <div class="col-6">
+                    <small class="text-muted">Lookback Window</small>
+                    <div><strong>${d.adaptive_lookback}</strong> trades per strategy</div>
+                </div>
+                <div class="col-6">
+                    <small class="text-muted">Min Trades</small>
+                    <div><strong>${d.adaptive_min_trades}</strong> before adaptation</div>
+                </div>
+            </div>
+            <hr class="my-2 border-secondary">
+            <h6 class="mb-2 small text-muted">ADAPTATION RANGES</h6>
+            <table class="table table-sm mb-0" style="font-size:0.8rem;">
+                <thead><tr><th>Parameter</th><th>Range</th><th>Driver</th></tr></thead>
+                <tbody>
+                    <tr><td>Position Size</td><td>0.15x - 2.0x</td><td>Profit Factor + Streak</td></tr>
+                    <tr><td>Confidence</td><td>0.60 - 0.90</td><td>Win Rate + PF</td></tr>
+                    <tr><td>Leverage Scale</td><td>0.6x - 1.0x</td><td>Overall PF + Streak</td></tr>
+                    <tr><td>SL Multiplier</td><td>1.2 - 2.0 ATR</td><td>Overall Win Rate</td></tr>
+                    <tr><td>R:R Ratio</td><td>1.5 - 2.5</td><td>Achieved R:R</td></tr>
+                </tbody>
+            </table>
+            <div class="mt-2 small text-muted">Strategies never disabled — only throttled via sizing (0.15x floor)</div>`;
+    } else {
+        adEl.innerHTML = `
+            <div class="text-center">
+                <span class="badge bg-secondary mb-2">DISABLED</span>
+                <div class="text-muted small">Static config active — using fixed parameters from settings.py</div>
+                <div class="mt-2 small">Enable with <code>ADAPTIVE_ENABLED = True</code></div>
+            </div>`;
+    }
+}
+
 // Bot control
 async function startBot() {
     $('btn-start').disabled = true;
@@ -593,7 +699,7 @@ async function refreshAll() {
     await Promise.all([
         loadStatus(), loadPortfolio(), loadPositions(),
         loadRisk(), loadTrades(), loadStrategyLog(), loadEquity(),
-        loadPerformance(),
+        loadPerformance(), loadConfig(),
     ]);
     $('last-updated').textContent = 'Updated ' + new Date().toLocaleTimeString();
 }

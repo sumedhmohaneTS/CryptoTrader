@@ -92,6 +92,49 @@ def api_performance():
     return jsonify(get_performance_report())
 
 
+@app.route("/api/config")
+def api_config():
+    from config import settings as s
+    config = {
+        "leverage": getattr(s, "LEVERAGE", 1),
+        "timeframe": getattr(s, "PRIMARY_TIMEFRAME", "15m"),
+        "max_positions": getattr(s, "MAX_OPEN_POSITIONS", 5),
+        "position_size_pct": getattr(s, "MAX_POSITION_PCT", 0.15),
+        "stop_loss_atr": getattr(s, "STOP_LOSS_ATR_MULTIPLIER", 1.5),
+        "reward_risk": getattr(s, "REWARD_RISK_RATIO", 2.0),
+        "trailing_enabled": getattr(s, "TRAILING_STOP_ENABLED", False),
+        "trailing_hybrid": getattr(s, "TRAILING_HYBRID", False),
+        "breakeven_rr": getattr(s, "BREAKEVEN_RR", 1.0),
+        "daily_loss_limit": getattr(s, "DAILY_LOSS_LIMIT_PCT", 0.12),
+        "circuit_breaker": getattr(s, "MAX_DRAWDOWN_PCT", 0.35),
+        "pairs": getattr(s, "DEFAULT_PAIRS", []),
+        "pair_rotation": getattr(s, "ENABLE_PAIR_ROTATION", False),
+        "adaptive_enabled": getattr(s, "ADAPTIVE_ENABLED", False),
+        "adaptive_lookback": getattr(s, "ADAPTIVE_LOOKBACK_TRADES", 30),
+        "adaptive_min_trades": getattr(s, "ADAPTIVE_MIN_TRADES", 8),
+        "confidence": {
+            "momentum": getattr(s, "STRATEGY_MIN_CONFIDENCE", {}).get("momentum", 0.78),
+            "mean_reversion": getattr(s, "STRATEGY_MIN_CONFIDENCE", {}).get("mean_reversion", 0.72),
+            "breakout": getattr(s, "STRATEGY_MIN_CONFIDENCE", {}).get("breakout", 0.70),
+        },
+    }
+
+    # Include live adaptive state if available
+    adaptive_state = None
+    if getattr(s, "ADAPTIVE_ENABLED", False):
+        try:
+            from adaptive.performance_tracker import PerformanceTracker
+            from adaptive.adaptive_controller import AdaptiveController
+            # Try to get the live bot's tracker (if running in same process)
+            # Otherwise return static config only
+            adaptive_state = {"status": "enabled", "note": "Overrides applied per-trade in bot loop"}
+        except Exception:
+            pass
+
+    config["adaptive_state"] = adaptive_state
+    return jsonify(config)
+
+
 @app.route("/api/bot/start", methods=["POST"])
 def api_bot_start():
     result = start_bot()
