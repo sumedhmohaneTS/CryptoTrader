@@ -31,6 +31,11 @@ class StrategyManager:
         news_score: float = 0.0,
     ) -> tuple[TradeSignal, MarketRegime]:
         regime = self.analyzer.classify(df)
+
+        # MTF regime confirmation: downgrade TRENDING to RANGING if higher TF disagrees
+        if regime == MarketRegime.TRENDING and higher_tf_data and getattr(settings, "MTF_REGIME_CONFIRMATION", False):
+            regime = self._confirm_regime(regime, higher_tf_data)
+
         strategy = self.strategies[regime]
 
         signal = strategy.analyze(df, symbol)
@@ -58,6 +63,31 @@ class StrategyManager:
         )
 
         return signal, regime
+
+    def _confirm_regime(self, regime: MarketRegime, higher_tf_data: dict[str, pd.DataFrame]) -> MarketRegime:
+        """Downgrade TRENDING to RANGING if higher TF is not trending."""
+        confirm_tf = getattr(settings, "MTF_REGIME_TF", "4h")
+        htf_df = higher_tf_data.get(confirm_tf)
+        if htf_df is None or (hasattr(htf_df, 'empty') and htf_df.empty):
+            # Fallback: try 1h if 4h not available
+            htf_df = higher_tf_data.get("1h")
+        if htf_df is None or (hasattr(htf_df, 'empty') and htf_df.empty):
+            return regime  # No higher TF data, keep original
+
+        from analysis.indicators import add_adx
+        htf_df = add_adx(htf_df)
+        adx_col = f"ADX_{settings.ADX_PERIOD}"
+        htf_adx = htf_df.iloc[-1].get(adx_col, 0)
+
+        threshold = getattr(settings, "MTF_REGIME_ADX_THRESHOLD", 22)
+        if htf_adx < threshold:
+            logger.info(
+                f"MTF REGIME: Downgraded TRENDING→RANGING "
+                f"({confirm_tf} ADX={htf_adx:.1f} < {threshold})"
+            )
+            return MarketRegime.RANGING
+
+        return regime
 
     def _apply_mtf_filter(
         self, signal: TradeSignal, higher_tf_data: dict[str, pd.DataFrame]

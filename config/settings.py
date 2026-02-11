@@ -149,6 +149,11 @@ DB_PATH = "data/trades.db"
 LOG_LEVEL = "INFO"
 LOG_FILE = "cryptotrader.log"
 
+# Multi-timeframe regime confirmation
+MTF_REGIME_CONFIRMATION = True              # Require higher TF to confirm trending regime
+MTF_REGIME_TF = "4h"                        # Which higher TF to check (4h recommended)
+MTF_REGIME_ADX_THRESHOLD = 22               # ADX threshold on higher TF (slightly lower than 15m's 25)
+
 # Adaptive regime system
 ADAPTIVE_ENABLED = True                     # Master switch for live bot
 ADAPTIVE_LOOKBACK_TRADES = 50              # Rolling window per strategy (larger = smoother)
