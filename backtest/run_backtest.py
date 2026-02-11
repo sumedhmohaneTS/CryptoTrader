@@ -58,6 +58,10 @@ Examples:
         "--dynamic-pairs", action="store_true", dest="dynamic_pairs",
         help="Enable dynamic pair rotation (scan universe, select trending pairs)",
     )
+    parser.add_argument(
+        "--smart-rotation", action="store_true", dest="smart_rotation",
+        help="Enable smart pair rotation with hysteresis (requires --dynamic-pairs)",
+    )
     args = parser.parse_args()
 
     print()
@@ -70,6 +74,8 @@ Examples:
         print("  Mode:    Walk-Forward Validation")
     if args.dynamic_pairs:
         print("  Mode:    Dynamic Pair Rotation")
+    if args.smart_rotation:
+        print("  Mode:    Smart Pair Rotation (hysteresis)")
     print()
 
     _quiet_loggers()
@@ -84,6 +90,13 @@ Examples:
         )
         wf.run()
     else:
+        # Apply smart rotation flag before engine init
+        if args.smart_rotation:
+            from config import settings as _settings
+            _settings.ENABLE_SMART_ROTATION = True
+            if not args.dynamic_pairs:
+                args.dynamic_pairs = True  # smart rotation implies dynamic pairs
+
         # 1. Download / load data
         print("[1/3] Loading historical data...")
         engine = BacktestEngine(

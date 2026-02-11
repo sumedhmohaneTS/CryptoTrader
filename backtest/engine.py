@@ -101,10 +101,17 @@ class BacktestEngine:
 
         # Pair scanner (only if dynamic)
         self.pair_scanner = None
-        if dynamic_pairs:
+        self.smart_selector = None
+        if dynamic_pairs and getattr(settings, "ENABLE_SMART_ROTATION", False):
+            from data.pair_scanner import SmartPairSelector
+            self.smart_selector = SmartPairSelector()
+            self.scan_interval = getattr(settings, "SMART_SCAN_INTERVAL_BARS", 48)
+        elif dynamic_pairs:
             from data.pair_scanner import PairScanner
             self.pair_scanner = PairScanner()
-        self.scan_interval = getattr(settings, "SCAN_INTERVAL_BARS", 48)
+            self.scan_interval = getattr(settings, "SCAN_INTERVAL_BARS", 48)
+        else:
+            self.scan_interval = getattr(settings, "SCAN_INTERVAL_BARS", 48)
         self.last_scan_bar = -self.scan_interval  # Force scan at bar 0
 
         # Data
@@ -375,26 +382,62 @@ class BacktestEngine:
         if not universe_data:
             return
 
-        new_active = self.pair_scanner.select_active_pairs(universe_data)
+        if self.smart_selector is not None:
+            # Smart rotation with hysteresis
+            open_positions = set(self.portfolio.positions.keys())
+            new_active, metadata = self.smart_selector.smart_select(
+                data=universe_data,
+                current_active=self.active_pairs,
+                core_pairs=list(getattr(settings, "CORE_PAIRS", [])),
+                max_active=getattr(settings, "MAX_ACTIVE_PAIRS", 10),
+                hysteresis=getattr(settings, "SMART_HYSTERESIS", 0.15),
+                min_holding_scans=getattr(settings, "SMART_MIN_HOLDING_SCANS", 2),
+                smoothing=getattr(settings, "SMART_SCORE_SMOOTHING", 3),
+                open_positions=open_positions,
+            )
 
-        added = set(new_active) - set(self.active_pairs)
-        removed = set(self.active_pairs) - set(new_active)
+            added = metadata.get("added", [])
+            removed = metadata.get("removed", [])
 
-        if added or removed:
-            print(f"  Pair rotation at bar {bar_idx}: "
-                  f"+{sorted(added) if added else '[]'} "
-                  f"-{sorted(removed) if removed else '[]'}",
-                  flush=True)
+            if added or removed:
+                print(f"  Smart rotation at bar {bar_idx}: "
+                      f"+{added} -{removed} | "
+                      f"Protected: {metadata.get('protected_count', 0)} | "
+                      f"Swaps: {len(metadata.get('swaps', []))}",
+                      flush=True)
 
-        self._pair_rotations.append({
-            "bar_idx": bar_idx,
-            "timestamp": timestamp,
-            "active": list(new_active),
-            "added": sorted(added),
-            "removed": sorted(removed),
-        })
+            self._pair_rotations.append({
+                "bar_idx": bar_idx,
+                "timestamp": timestamp,
+                "active": list(new_active),
+                "added": added,
+                "removed": removed,
+                "metadata": metadata,
+            })
 
-        self.active_pairs = new_active
+            self.active_pairs = new_active
+        else:
+            # Legacy rotation (no hysteresis)
+            new_active = self.pair_scanner.select_active_pairs(universe_data)
+
+            added = set(new_active) - set(self.active_pairs)
+            removed = set(self.active_pairs) - set(new_active)
+
+            if added or removed:
+                print(f"  Pair rotation at bar {bar_idx}: "
+                      f"+{sorted(added) if added else '[]'} "
+                      f"-{sorted(removed) if removed else '[]'}",
+                      flush=True)
+
+            self._pair_rotations.append({
+                "bar_idx": bar_idx,
+                "timestamp": timestamp,
+                "active": list(new_active),
+                "added": sorted(added),
+                "removed": sorted(removed),
+            })
+
+            self.active_pairs = new_active
 
     def _close_position(self, symbol: str, exit_price: float, reason: str, timestamp, bar_index: int = 0):
         """Close a position and record the trade."""

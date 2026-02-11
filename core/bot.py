@@ -39,7 +39,13 @@ class TradingBot:
 
         # Dynamic pair rotation
         self.pair_scanner = PairScanner()
-        self.scan_interval = getattr(settings, "SCAN_INTERVAL_BARS", 16)
+        self.smart_selector = None
+        if getattr(settings, "ENABLE_SMART_ROTATION", False):
+            from data.pair_scanner import SmartPairSelector
+            self.smart_selector = SmartPairSelector()
+            self.scan_interval = getattr(settings, "SMART_SCAN_INTERVAL_BARS", 48)
+        else:
+            self.scan_interval = getattr(settings, "SCAN_INTERVAL_BARS", 16)
         self._last_scan_tick = -self.scan_interval  # Force scan on first tick
         self._configured_symbols: set[str] = set(self.pairs)  # Symbols with leverage/margin set
 
@@ -147,9 +153,11 @@ class TradingBot:
             total_value, self.portfolio.open_position_count
         )
 
-        # Dynamic pair rotation (disabled when DYNAMIC_PAIR_DISCOVERY is False
-        # and no PAIR_UNIVERSE rotation is wanted — Test 5 showed rotation hurts on 15m)
-        if getattr(settings, "ENABLE_PAIR_ROTATION", False):
+        # Dynamic pair rotation
+        if getattr(settings, "ENABLE_SMART_ROTATION", False):
+            if (self._tick_counter - self._last_scan_tick) >= self.scan_interval:
+                self._smart_rescan_pairs()
+        elif getattr(settings, "ENABLE_PAIR_ROTATION", False):
             if (self._tick_counter - self._last_scan_tick) >= self.scan_interval:
                 self._rescan_pairs()
 
@@ -245,6 +253,68 @@ class TradingBot:
             logger.info(
                 f"Pair rotation: +{sorted(added) if added else '[]'} "
                 f"-{sorted(removed) if removed else '[]'} | "
+                f"Active: {new_pairs}"
+            )
+
+        self.pairs = new_pairs
+
+    def _smart_rescan_pairs(self):
+        """Rescan with smart selection (hysteresis + holding periods)."""
+        self._last_scan_tick = self._tick_counter
+
+        dynamic_discovery = getattr(settings, "DYNAMIC_PAIR_DISCOVERY", False)
+
+        if dynamic_discovery:
+            tickers = self.exchange.fetch_all_futures_tickers()
+            if not tickers:
+                logger.warning("Smart scan: no tickers returned, keeping current pairs")
+                return
+            candidates = self.smart_selector.scanner.discover_universe(tickers)
+        else:
+            candidates = list(getattr(settings, "PAIR_UNIVERSE", self.pairs))
+
+        # Fetch OHLCV and score each candidate
+        candidate_data: dict = {}
+        for symbol in candidates:
+            try:
+                df = self.fetcher.fetch_ohlcv(
+                    symbol, settings.PRIMARY_TIMEFRAME, limit=100
+                )
+                if not df.empty and len(df) >= settings.EMA_TREND + 10:
+                    df = add_all_indicators(df)
+                    candidate_data[symbol] = df
+            except Exception as e:
+                logger.debug(f"Smart scan: failed to load {symbol}: {e}")
+
+        if not candidate_data:
+            logger.warning("Smart scan: no candidate data, keeping current pairs")
+            return
+
+        open_positions = set(self.portfolio.positions.keys())
+        new_pairs, metadata = self.smart_selector.smart_select(
+            data=candidate_data,
+            current_active=self.pairs,
+            core_pairs=list(getattr(settings, "CORE_PAIRS", [])),
+            max_active=getattr(settings, "MAX_ACTIVE_PAIRS", 10),
+            hysteresis=getattr(settings, "SMART_HYSTERESIS", 0.15),
+            min_holding_scans=getattr(settings, "SMART_MIN_HOLDING_SCANS", 2),
+            smoothing=getattr(settings, "SMART_SCORE_SMOOTHING", 3),
+            open_positions=open_positions,
+        )
+
+        added = set(new_pairs) - set(self.pairs)
+
+        # Configure leverage/margin for newly added pairs
+        for symbol in added:
+            if symbol not in self._configured_symbols:
+                self.exchange.setup_symbol(symbol)
+                self._configured_symbols.add(symbol)
+
+        if metadata.get("added") or metadata.get("removed"):
+            logger.info(
+                f"Smart rotation: +{metadata.get('added', [])} "
+                f"-{metadata.get('removed', [])} | "
+                f"Protected: {metadata.get('protected_count', 0)} | "
                 f"Active: {new_pairs}"
             )
 

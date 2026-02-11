@@ -96,12 +96,13 @@ PAIR_UNIVERSE = [
     "DOT/USDT", "NEAR/USDT", "APT/USDT",
     "1000PEPE/USDT", "WIF/USDT", "FET/USDT", "RENDER/USDT",
 ]
-CORE_PAIRS = ["BTC/USDT", "SOL/USDT"]   # Always active
+CORE_PAIRS = ["SOL/USDT", "SUI/USDT", "RENDER/USDT"]  # Proven top performers — never rotate out
 MAX_DYNAMIC_PAIRS = 5                     # Top 5 added to core = 7 total
 SCAN_INTERVAL_BARS = 16                   # Rescan every 4 hours (16 x 15m)
-PAIR_SCORE_ADX_WEIGHT = 0.40
-PAIR_SCORE_VOLUME_WEIGHT = 0.30
-PAIR_SCORE_MOMENTUM_WEIGHT = 0.30
+PAIR_SCORE_ADX_WEIGHT = 0.35
+PAIR_SCORE_VOLUME_WEIGHT = 0.25
+PAIR_SCORE_MOMENTUM_WEIGHT = 0.25
+PAIR_SCORE_DIRECTIONAL_WEIGHT = 0.15
 
 # Dynamic pair discovery (live API scanning)
 ENABLE_PAIR_ROTATION = False              # Disabled — rotation hurts on 15m (Test 5: -2.89%)
@@ -109,6 +110,14 @@ DYNAMIC_PAIR_DISCOVERY = False            # If rotation enabled: True = scan API
 MIN_VOLUME_USDT = 10_000_000             # $10M min 24h volume for pre-filter
 MAX_SCAN_CANDIDATES = 50                  # Cap on pairs to fetch OHLCV for (Stage 2)
 PAIR_BLACKLIST = ["ETH/USDT"]             # Never trade these (known losers)
+
+# Smart pair rotation (improved version — hysteresis prevents destructive churn)
+ENABLE_SMART_ROTATION = False            # Master switch (enable after backtest validates)
+SMART_SCAN_INTERVAL_BARS = 48            # Rescan every 12 hours (48 x 15m)
+SMART_HYSTERESIS = 0.15                  # Replacement must score 0.15 higher than worst active
+SMART_MIN_HOLDING_SCANS = 2              # New pairs protected for 2 scans (24h)
+SMART_SCORE_SMOOTHING = 3               # EMA over last 3 scan scores
+MAX_ACTIVE_PAIRS = 10                    # Total active (core + flex)
 
 # News sentiment
 NEWS_CACHE_HOURS = 8            # Cache news for 8 hours (100 req/month limit)
