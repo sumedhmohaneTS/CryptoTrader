@@ -125,9 +125,12 @@ class TradingBot:
                     balance = self.exchange.get_usdt_balance()
                     prices = self._get_current_prices()
                     total_value = self.portfolio.calculate_portfolio_value(balance, prices)
-                    self.risk_manager.reset_daily(total_value)
-                    last_daily_reset = now.date()
-                    logger.info(f"Daily reset. Portfolio: ${total_value:.2f}")
+                    if total_value > 0:
+                        self.risk_manager.reset_daily(total_value)
+                        last_daily_reset = now.date()
+                        logger.info(f"Daily reset. Portfolio: ${total_value:.2f}")
+                    else:
+                        logger.warning("Daily reset skipped — API returned $0 balance")
 
                 await self._tick()
 

@@ -395,6 +395,52 @@ All backtests run on **Nov 2025 - Feb 2026** (3 months) with **$100 initial bala
 
 ---
 
+## Test 12: Smart Pair Rotation with Hysteresis
+
+**Date**: Feb 2026
+**Changes**: Added smart pair rotation with 3 safeguards to prevent the churn that killed Test 5: hysteresis threshold (replacement must outscore worst active by 0.15+), holding periods (new pairs protected for 2 scans/24h), and core pair protection (SOL/SUI/RENDER never rotate out). Scans every 12h instead of 4h. Added directional quality scoring component.
+
+| Setting | Value |
+|---------|-------|
+| Leverage | 25x |
+| Timeframe | 15m |
+| Pairs | Dynamic: 3 core (SOL, SUI, RENDER) + 7 flex from 17-pair universe |
+| Position size | 15% |
+| Stop loss | 1.5 ATR |
+| Take profit | Hybrid (fixed TP activates trail) |
+| Trailing | 1.5 ATR trail, breakeven at 1.0:1 R:R |
+| Max positions | 5 |
+| Scan interval | Every 48 bars (12 hours) |
+| Hysteresis | 0.15 (replacement must outscore by this margin) |
+| Holding period | 2 scans (24 hours) minimum |
+| Core pairs | SOL, SUI, RENDER (never rotate out) |
+
+### Results
+
+| Metric | Value |
+|--------|-------|
+| **Return** | **+28.01%** |
+| Sharpe | 2.03 |
+| Max Drawdown | 23.86% |
+| Trades | 275 |
+| Win Rate | 48.0% |
+| Churn Rate | ~35% (vs 100% in Test 5) |
+
+**What worked**:
+1. Hysteresis eliminated destructive churn — 35% rotation rate vs 100% in Test 5
+2. Core pairs (SOL, SUI, RENDER) stayed active throughout
+3. Holding periods prevented premature exits
+4. Still profitable (+28%) unlike old rotation (-2.89%)
+
+**What didn't work**:
+1. Rotation still let in some losers (LINK -$10.61, WIF -$10.12)
+2. Returns dropped from +52.86% (static) to +28.01% — capital diverted to underperformers
+3. Flex pairs didn't consistently outperform the static set
+
+**Verdict**: Smart rotation is a massive improvement over naive rotation (+28% vs -2.89%) but still underperforms static pair selection (+52.86%). **Decision: Use smart rotation as a discovery tool only** (`scripts/discover_pairs.py`) — run periodically to find trending pairs, then manually update DEFAULT_PAIRS. Live trading stays on static pairs.
+
+---
+
 ## Summary: All Tests Comparison
 
 | Test | Config | Return | Sharpe | Trades | Win Rate | Max DD | PF |
@@ -410,6 +456,7 @@ All backtests run on **Nov 2025 - Feb 2026** (3 months) with **$100 initial bala
 | 9 | 20x, 15m, 10 pairs, momentum 0.75 | +41.73% | 2.25 | 343 | 46.9% | 23.08% | 1.30 |
 | 10 | 22x, 15m, momentum 0.78 | +45.42% | 2.36 | 299 | 48.8% | 23.05% | 1.34 |
 | **11** | **25x, 15m, 10 pairs, momentum 0.78** | **+52.86%** | **2.46** | **299** | **48.8%** | **23.83%** | **1.34** |
+| 12 | 25x, 15m, smart rotation (hysteresis) | +28.01% | 2.03 | 275 | 48.0% | 23.86% | — |
 
 ---
 
@@ -433,6 +480,8 @@ All backtests run on **Nov 2025 - Feb 2026** (3 months) with **$100 initial bala
 16. **Wider SL hurts** -- 1.5 ATR -> 1.8 ATR reduced returns by 60%
 17. **Higher R:R filter hurts** -- 2.0 -> 2.2 lowered win rate too much
 18. **Max drawdown scales with leverage** -- 8.7% at 15x -> 23.8% at 25x (proportional)
+19. **Smart rotation (hysteresis) >> naive rotation** -- +28% vs -2.89%, but still < static (+53%)
+20. **Use rotation for discovery, not live trading** -- find new pairs, then manually update config
 
 ## Best Configuration (Test 11 -- LIVE)
 

@@ -110,6 +110,13 @@ class RiskManager:
             logger.warning(f"Trading halted: {self.halt_reason}")
             return False
 
+        # Guard against API failures returning $0 balance
+        if portfolio_value <= 0:
+            logger.warning(
+                "Portfolio value is $0 — likely API failure, skipping circuit breaker check"
+            )
+            return False  # Don't trade, but don't halt either
+
         # Daily loss limit
         if self.daily_starting_value > 0:
             daily_pnl_pct = (portfolio_value - self.daily_starting_value) / self.daily_starting_value
