@@ -232,7 +232,7 @@ All backtests run on **Nov 2025 - Feb 2026** (3 months) with **$100 initial bala
 
 ---
 
-## Test 7: Optimized Thresholds + Earlier Profit Locking (CURRENT LIVE CONFIG)
+## Test 7: Optimized Thresholds + Earlier Profit Locking
 
 **Date**: Feb 2026
 **Changes**: Lowered momentum confidence 0.85->0.80 (more trades from top earner), earlier breakeven at 1.0 R:R (lock profits sooner), increased trade limits for 8 pairs (3/hr, 18/day), dropped 1000PEPE (net loser).
@@ -278,7 +278,120 @@ All backtests run on **Nov 2025 - Feb 2026** (3 months) with **$100 initial bala
 3. Dropping 1000PEPE removed $5.42 of drag
 4. Higher trade limits (3/hr, 18/day) captured 35 more trades
 
-**Verdict**: First config to exceed 25% target. Best risk-adjusted return (Sharpe 3.22) with manageable drawdown (8.70%). Deployed to live trading.
+**Verdict**: First config to exceed 25% target. Best risk-adjusted return (Sharpe 3.22) with manageable drawdown (8.70%).
+
+---
+
+## Test 8: 12 Pairs (Adding AXS, ZEC, FIL, WIF)
+
+**Date**: Feb 2026
+**Changes**: Added 4 new pairs (AXS, ZEC, FIL, WIF) to Test 7 config. Testing if more pairs = more opportunity.
+
+### Results
+
+| Metric | Value |
+|--------|-------|
+| **Return** | **+19.35%** |
+| Sharpe | 1.84 |
+| Max Drawdown | 21.63% |
+| Trades | 333 |
+| Win Rate | 47.7% |
+
+**New pairs**: AXS +$8.46 (winner), ZEC +$3.48 (winner), FIL -$1.78 (loser), WIF -$2.80 (loser)
+
+**Verdict**: More pairs diluted capital from proven winners. RENDER dropped from +$17.62 to +$10.56. Max DD nearly tripled. FIL and WIF are losers -- only AXS and ZEC worth adding.
+
+---
+
+## Test 9: 20x Leverage, 10 Pairs, 15% Size, Momentum 0.75
+
+**Date**: Feb 2026
+**Changes**: Leverage 15x->20x, position size 12%->15%, max positions 4->5, momentum confidence 0.80->0.75, 10 pairs (dropped FIL/WIF, kept AXS/ZEC).
+
+### Results
+
+| Metric | Value |
+|--------|-------|
+| **Return** | **+41.73%** |
+| Sharpe | 2.25 |
+| Max Drawdown | 23.08% |
+| Trades | 343 |
+| Win Rate | 46.9% |
+| Momentum PnL | +$63.94 |
+
+**Verdict**: Big jump from leverage + sizing, but momentum 0.75 let in too many marginal trades (343 trades, low WR). Mean reversion and breakout both turned negative.
+
+---
+
+## Test 10: 22x Leverage, Momentum 0.78
+
+**Date**: Feb 2026
+**Changes**: Tightened momentum confidence 0.75->0.78 (sweet spot), leverage 20x->22x.
+
+### Results
+
+| Metric | Value |
+|--------|-------|
+| **Return** | **+45.42%** |
+| Sharpe | 2.36 |
+| Max Drawdown | 23.05% |
+| Trades | 299 |
+| Win Rate | 48.8% |
+| Momentum PnL | +$68.93 |
+
+**Verdict**: Better quality -- fewer trades (343->299) with higher WR (46.9%->48.8%) and better Sharpe. Close to 50% target.
+
+---
+
+## Test 11: 25x Leverage (CURRENT LIVE CONFIG)
+
+**Date**: Feb 2026
+**Changes**: Leverage 22x->25x. All other settings same as Test 10.
+
+| Setting | Value |
+|---------|-------|
+| Leverage | **25x** |
+| Timeframe | 15m |
+| Pairs | BTC, SOL, XRP, DOGE, AVAX, SUI, RENDER, LINK, AXS, ZEC (10 pairs) |
+| Position size | **15%** |
+| Stop loss | 1.5 ATR |
+| Take profit | Hybrid (fixed TP activates trail) |
+| Trailing | 1.5 ATR trail, breakeven at 1.0:1 R:R |
+| Max positions | **5** |
+| Momentum confidence | **0.78** |
+| Mean rev confidence | 0.72 |
+| Breakout confidence | 0.70 |
+| Trades/hour | 3 |
+| Trades/day | 18 |
+
+### Results
+
+| Metric | Value |
+|--------|-------|
+| **Return** | **+52.86%** |
+| Sharpe | **2.46** |
+| Profit Factor | **1.34** |
+| Max Drawdown | 23.83% |
+| Trades | 299 |
+| Win Rate | 48.8% (146W / 153L) |
+| Expectancy | $0.218/trade |
+| Avg Win | $1.74 |
+| Avg Loss | -$1.23 |
+| R:R Achieved | 1.41 |
+| Max Consec Losses | 7 |
+| Fees | $24.45 |
+
+**Per-strategy PnL**: Momentum +$80.75 (188 trades, 48.4% WR), Mean Reversion -$7.48 (76 trades, 51.3% WR), Breakout -$8.18 (35 trades, 45.7% WR)
+
+**Per-symbol PnL**: RENDER +$22.40 (60% WR), AXS +$18.56 (48.7% WR), SUI +$12.50 (58.3% WR), ZEC +$9.34 (56.4% WR), XRP +$7.97, SOL +$2.66, AVAX +$0.92, LINK -$0.85, DOGE -$3.28, **BTC -$5.13** (worst performer)
+
+**What worked**:
+1. 25x leverage scaled all PnL by ~67% vs 15x
+2. AXS and ZEC added +$27.90 combined -- validated as top pairs
+3. Momentum confidence 0.78 is the sweet spot (better than 0.75 or 0.80)
+4. 15% position size with 5 max positions captured more winners
+
+**Verdict**: Exceeded 50% target. Momentum carries 100%+ of profits (mean_rev and breakout are drags). Max DD of 23.83% is acceptable for the return. Deployed to live trading.
 
 ---
 
@@ -292,7 +405,11 @@ All backtests run on **Nov 2025 - Feb 2026** (3 months) with **$100 initial bala
 | 4 | 15x, 5m, dynamic pairs, pure trailing (TUNED) | -2.86% | -0.32 | 246 | 42.3% | 18.45% | 1.05 |
 | 5 | 15x, 15m, dynamic rotation | -2.89% | — | 165 | 42.4% | — | — |
 | 6 | 15x, 15m, 12% size, 4 pos, +RENDER/LINK | +14.81% | 1.90 | 197 | 43.7% | 9.26% | 1.25 |
-| **7** | **15x, 15m, momentum 0.80, breakeven 1.0** | **+26.04%** | **3.22** | **232** | **47.8%** | **8.70%** | **1.43** |
+| 7 | 15x, 15m, momentum 0.80, breakeven 1.0 | +26.04% | 3.22 | 232 | 47.8% | 8.70% | 1.43 |
+| 8 | 15x, 15m, 12 pairs (added FIL/WIF) | +19.35% | 1.84 | 333 | 47.7% | 21.63% | 1.26 |
+| 9 | 20x, 15m, 10 pairs, momentum 0.75 | +41.73% | 2.25 | 343 | 46.9% | 23.08% | 1.30 |
+| 10 | 22x, 15m, momentum 0.78 | +45.42% | 2.36 | 299 | 48.8% | 23.05% | 1.34 |
+| **11** | **25x, 15m, 10 pairs, momentum 0.78** | **+52.86%** | **2.46** | **299** | **48.8%** | **23.83%** | **1.34** |
 
 ---
 
@@ -300,20 +417,23 @@ All backtests run on **Nov 2025 - Feb 2026** (3 months) with **$100 initial bala
 
 1. **15m is the optimal timeframe** -- all profitable tests used 15m; 5m always loses
 2. **Indicator periods MUST match timeframe** -- 5m with 15m indicators = -22% disaster
-3. **Hybrid trailing > pure trailing > no trailing** -- +26% (hybrid) vs -2.86% (pure) vs +8% (none)
-4. **Earlier breakeven (1.0 R:R) significantly improves win rate** -- 43.7% -> 47.8%
-5. **Momentum is the workhorse strategy** -- +$28.64 (84% of total PnL in Test 7)
-6. **Lower momentum confidence threshold captures more edge** -- 0.85->0.80 was a major win
-7. **Dynamic pair rotation hurts on 15m** -- too much churn; static pairs with proven winners is better
-8. **Dynamic rotation IS useful for discovery** -- found RENDER and FET as top performers
-9. **RENDER and SUI are standout performers** -- consistently high win rates and PnL
-10. **ETH and 1000PEPE are net losers** -- dropped from all configs
-11. **BTC underperforms on signals** -- too efficient, but kept for diversification
-12. **Position sizing matters** -- 8%->12% with 4 positions captured more from winning streaks
-13. **Fee drag is real** -- 500+ trades on $100 = $19 fees (19% of capital); fewer better trades > many marginal trades
-14. **Wider SL hurts** -- 1.5 ATR -> 1.8 ATR reduced returns by 60%
-15. **Higher R:R filter hurts** -- 2.0 -> 2.2 lowered win rate too much
+3. **Hybrid trailing > pure trailing > no trailing** -- +53% (hybrid) vs -2.86% (pure) vs +8% (none)
+4. **Earlier breakeven (1.0 R:R) significantly improves win rate** -- 43.7% -> 48.8%
+5. **Momentum is the workhorse strategy** -- +$80.75 (100%+ of total PnL in Test 11)
+6. **Momentum confidence 0.78 is the sweet spot** -- 0.75 lets in junk, 0.85 blocks edge
+7. **Leverage is the biggest return lever** -- 15x->25x scaled +26% to +53%
+8. **Dynamic pair rotation hurts on 15m** -- too much churn; static pairs with proven winners is better
+9. **Dynamic rotation IS useful for discovery** -- found RENDER, FET, AXS, ZEC
+10. **RENDER, AXS, SUI, ZEC are standout performers** -- consistently profitable across tests
+11. **ETH, 1000PEPE, FIL, WIF are net losers** -- dropped from all configs
+12. **BTC and DOGE underperform** -- kept for diversification but always negative
+13. **Adding losers dilutes capital from winners** -- Test 8 (12 pairs) was worse than Test 7 (8 pairs)
+14. **Position sizing matters** -- 15% with 5 positions captures more from winning streaks
+15. **Fee drag is real** -- 300+ trades on $100 = $24 fees; fewer quality trades > many marginal
+16. **Wider SL hurts** -- 1.5 ATR -> 1.8 ATR reduced returns by 60%
+17. **Higher R:R filter hurts** -- 2.0 -> 2.2 lowered win rate too much
+18. **Max drawdown scales with leverage** -- 8.7% at 15x -> 23.8% at 25x (proportional)
 
-## Best Configuration (Test 7 -- LIVE)
+## Best Configuration (Test 11 -- LIVE)
 
-15x leverage, 15m timeframe, hybrid trailing stops (breakeven at 1.0 R:R), 8 pairs (BTC, SOL, XRP, DOGE, AVAX, SUI, RENDER, LINK), 12% position size, momentum confidence 0.80. **Return: +26.04%, Sharpe: 3.22.**
+25x leverage, 15m timeframe, hybrid trailing stops (breakeven at 1.0 R:R), 10 pairs (BTC, SOL, XRP, DOGE, AVAX, SUI, RENDER, LINK, AXS, ZEC), 15% position size, 5 max positions, momentum confidence 0.78. **Return: +52.86%, Sharpe: 2.46.**

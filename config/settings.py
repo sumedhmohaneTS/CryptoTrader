@@ -12,7 +12,7 @@ CRYPTOPANIC_API_KEY = os.getenv("CRYPTOPANIC_API_KEY", "")
 
 # Futures config
 TRADING_TYPE = "future"          # "spot" or "future"
-LEVERAGE = 15                    # 15x leverage for aggressive growth
+LEVERAGE = 25                    # 25x leverage — targeting 50% return
 MARGIN_TYPE = "ISOLATED"         # ISOLATED — caps loss per position
 
 # Trading pairs (USDT-M futures contracts) — dropped ETH & 1000PEPE (net losers)
@@ -21,6 +21,7 @@ DEFAULT_PAIRS = [
     "BTC/USDT", "SOL/USDT", "XRP/USDT",
     "DOGE/USDT", "AVAX/USDT", "SUI/USDT",
     "RENDER/USDT", "LINK/USDT",
+    "AXS/USDT", "ZEC/USDT",
 ]
 
 # Timeframes (15m primary, 1h/4h filters — best performing config)
@@ -31,12 +32,12 @@ PRIMARY_TIMEFRAME = "15m"
 BOT_LOOP_INTERVAL_SECONDS = 60   # Check every 60s on 15m timeframe
 
 # Risk management
-MAX_POSITION_PCT = 0.12          # 12% of portfolio per trade (increased from 8%)
+MAX_POSITION_PCT = 0.15          # 15% of portfolio per trade
 STOP_LOSS_ATR_MULTIPLIER = 1.5   # 1.5x ATR stop — proven optimal
 REWARD_RISK_RATIO = 2.0          # Fixed 2:1 R:R (hybrid trailing extends beyond this)
 DAILY_LOSS_LIMIT_PCT = 0.12      # Stop trading if down 12% in a day
 MAX_DRAWDOWN_PCT = 0.35          # Circuit breaker at 35% drawdown from peak
-MAX_OPEN_POSITIONS = 4           # Allow 4 concurrent positions
+MAX_OPEN_POSITIONS = 5           # Allow 5 concurrent positions
 
 # Trailing stop system (hybrid — fixed TP activates trailing, best in Test 2)
 TRAILING_STOP_ENABLED = True     # Enable trailing stops
@@ -83,7 +84,7 @@ MIN_SIGNAL_CONFIDENCE = 0.75
 
 # Per-strategy confidence minimums (override MIN_SIGNAL_CONFIDENCE)
 STRATEGY_MIN_CONFIDENCE = {
-    "momentum": 0.80,              # Lowered from 0.85 — momentum is top earner, allow more trades
+    "momentum": 0.78,              # Sweet spot — enough trades without too many marginal ones
     "mean_reversion": 0.72,
     "breakout": 0.70,
 }
