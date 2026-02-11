@@ -18,6 +18,7 @@ class Position:
     confidence: float
 
     # Trailing stop fields
+    sl_atr_multiplier: float = 0.0      # SL ATR mult used at entry (for trailing stop)
     initial_risk: float = 0.0           # abs(entry - initial stop), set at open
     highest_price: float = 0.0          # Best price since entry (for longs)
     lowest_price: float = 0.0           # Best price since entry (for shorts)

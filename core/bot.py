@@ -417,19 +417,24 @@ class TradingBot:
 
                 risk = abs(signal.entry_price - signal.stop_loss)
                 reward = abs(signal.take_profit - signal.entry_price)
-                if risk > 0 and reward / risk < overrides.rr_ratio - 0.01:
+                strat_rr = overrides.rr_ratio.get(signal.strategy, settings.REWARD_RISK_RATIO)
+                if risk > 0 and reward / risk < strat_rr - 0.01:
                     return
 
                 # Rebuild SL/TP with adaptive ATR multiplier if changed
-                if abs(overrides.sl_atr_multiplier - settings.STOP_LOSS_ATR_MULTIPLIER) > 0.01:
-                    atr_scale = overrides.sl_atr_multiplier / settings.STOP_LOSS_ATR_MULTIPLIER
+                strat_sl = overrides.sl_atr_multiplier.get(signal.strategy, settings.STOP_LOSS_ATR_MULTIPLIER)
+                base_sl = getattr(settings, "STRATEGY_SL_ATR_MULTIPLIER", {}).get(
+                    signal.strategy, settings.STOP_LOSS_ATR_MULTIPLIER
+                )
+                if abs(strat_sl - base_sl) > 0.01:
+                    atr_scale = strat_sl / base_sl
                     new_risk = risk * atr_scale
                     if signal.signal == Signal.BUY:
                         signal.stop_loss = signal.entry_price - new_risk
-                        signal.take_profit = signal.entry_price + new_risk * overrides.rr_ratio
+                        signal.take_profit = signal.entry_price + new_risk * strat_rr
                     else:
                         signal.stop_loss = signal.entry_price + new_risk
-                        signal.take_profit = signal.entry_price - new_risk * overrides.rr_ratio
+                        signal.take_profit = signal.entry_price - new_risk * strat_rr
             else:
                 if not self.risk_manager.validate_signal(signal):
                     return
@@ -481,6 +486,9 @@ class TradingBot:
                 )
 
                 # Track position with actual filled quantity
+                sl_mult = getattr(settings, "STRATEGY_SL_ATR_MULTIPLIER", {}).get(
+                    signal.strategy, settings.STOP_LOSS_ATR_MULTIPLIER
+                )
                 position = Position(
                     trade_id=trade_id,
                     symbol=symbol,
@@ -491,6 +499,7 @@ class TradingBot:
                     take_profit=signal.take_profit,
                     strategy=signal.strategy,
                     confidence=signal.confidence,
+                    sl_atr_multiplier=sl_mult,
                 )
                 self.portfolio.add_position(position)
                 self.risk_manager.record_trade_opened()
@@ -562,7 +571,7 @@ class TradingBot:
         """Update trailing stop: track extreme, trigger breakeven, trail the stop."""
         breakeven_rr = getattr(settings, "BREAKEVEN_RR", 1.5)
         trail_mult = getattr(settings, "TRAILING_STOP_ATR_MULTIPLIER", 1.0)
-        sl_mult = getattr(settings, "STOP_LOSS_ATR_MULTIPLIER", 0.75)
+        sl_mult = position.sl_atr_multiplier if position.sl_atr_multiplier > 0 else getattr(settings, "STOP_LOSS_ATR_MULTIPLIER", 0.75)
 
         # Derive trail distance from initial risk
         # initial_risk = SL_MULT * ATR, so ATR = initial_risk / SL_MULT

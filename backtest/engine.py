@@ -224,8 +224,8 @@ class BacktestEngine:
                 overrides = self.adaptive_controller.compute_overrides()
                 equity_record["adaptive"] = {
                     "leverage_scale": overrides.leverage_scale,
-                    "sl_atr": overrides.sl_atr_multiplier,
-                    "rr_ratio": overrides.rr_ratio,
+                    "sl_atr": dict(overrides.sl_atr_multiplier),
+                    "rr_ratio": dict(overrides.rr_ratio),
                     "enabled": dict(overrides.strategy_enabled),
                     "confidence": dict(overrides.min_confidence),
                     "size_scale": dict(overrides.position_size_scale),
@@ -369,7 +369,7 @@ class BacktestEngine:
         """Update trailing stop using candle high/low (backtest version)."""
         breakeven_rr = getattr(settings, "BREAKEVEN_RR", 1.5)
         trail_mult = getattr(settings, "TRAILING_STOP_ATR_MULTIPLIER", 1.0)
-        sl_mult = getattr(settings, "STOP_LOSS_ATR_MULTIPLIER", 0.75)
+        sl_mult = position.sl_atr_multiplier if position.sl_atr_multiplier > 0 else getattr(settings, "STOP_LOSS_ATR_MULTIPLIER", 0.75)
 
         if position.initial_risk <= 0 or sl_mult <= 0:
             return
@@ -606,22 +606,27 @@ class BacktestEngine:
             if signal.stop_loss <= 0:
                 return
 
-            # Use adaptive R:R ratio
+            # Use adaptive R:R ratio (per-strategy)
             risk = abs(signal.entry_price - signal.stop_loss)
             reward = abs(signal.take_profit - signal.entry_price)
-            if risk > 0 and reward / risk < overrides.rr_ratio - 0.01:
+            strat_rr = overrides.rr_ratio.get(signal.strategy, settings.REWARD_RISK_RATIO)
+            if risk > 0 and reward / risk < strat_rr - 0.01:
                 return
 
-            # Rebuild SL/TP with adaptive ATR multiplier if different from default
-            if abs(overrides.sl_atr_multiplier - settings.STOP_LOSS_ATR_MULTIPLIER) > 0.01:
-                atr_scale = overrides.sl_atr_multiplier / settings.STOP_LOSS_ATR_MULTIPLIER
+            # Rebuild SL/TP with adaptive ATR multiplier if different from strategy base
+            strat_sl = overrides.sl_atr_multiplier.get(signal.strategy, settings.STOP_LOSS_ATR_MULTIPLIER)
+            base_sl = getattr(settings, "STRATEGY_SL_ATR_MULTIPLIER", {}).get(
+                signal.strategy, settings.STOP_LOSS_ATR_MULTIPLIER
+            )
+            if abs(strat_sl - base_sl) > 0.01:
+                atr_scale = strat_sl / base_sl
                 new_risk = risk * atr_scale
                 if signal.signal == Signal.BUY:
                     signal.stop_loss = signal.entry_price - new_risk
-                    signal.take_profit = signal.entry_price + new_risk * overrides.rr_ratio
+                    signal.take_profit = signal.entry_price + new_risk * strat_rr
                 else:
                     signal.stop_loss = signal.entry_price + new_risk
-                    signal.take_profit = signal.entry_price - new_risk * overrides.rr_ratio
+                    signal.take_profit = signal.entry_price - new_risk * strat_rr
         else:
             if not self.risk_manager.validate_signal(signal):
                 return
@@ -665,6 +670,9 @@ class BacktestEngine:
 
         # Create position
         self.trade_counter += 1
+        sl_mult = getattr(settings, "STRATEGY_SL_ATR_MULTIPLIER", {}).get(
+            signal.strategy, settings.STOP_LOSS_ATR_MULTIPLIER
+        )
         position = Position(
             trade_id=self.trade_counter,
             symbol=symbol,
@@ -675,6 +683,7 @@ class BacktestEngine:
             take_profit=signal.take_profit,
             strategy=signal.strategy,
             confidence=signal.confidence,
+            sl_atr_multiplier=sl_mult,
         )
         # Store entry time for trade records
         position._entry_time = timestamp

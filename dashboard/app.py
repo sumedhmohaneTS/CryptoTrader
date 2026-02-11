@@ -102,6 +102,8 @@ def api_config():
         "position_size_pct": getattr(s, "MAX_POSITION_PCT", 0.15),
         "stop_loss_atr": getattr(s, "STOP_LOSS_ATR_MULTIPLIER", 1.5),
         "reward_risk": getattr(s, "REWARD_RISK_RATIO", 2.0),
+        "strategy_sl_atr": getattr(s, "STRATEGY_SL_ATR_MULTIPLIER", {}),
+        "strategy_rr": getattr(s, "STRATEGY_REWARD_RISK_RATIO", {}),
         "trailing_enabled": getattr(s, "TRAILING_STOP_ENABLED", False),
         "trailing_hybrid": getattr(s, "TRAILING_HYBRID", False),
         "breakeven_rr": getattr(s, "BREAKEVEN_RR", 1.0),

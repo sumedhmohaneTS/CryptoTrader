@@ -238,11 +238,14 @@ class RiskManager:
             logger.warning("No valid stop-loss, rejecting signal")
             return False
 
-        # Verify R:R ratio (small epsilon to avoid floating-point rejection)
+        # Verify R:R ratio (per-strategy, small epsilon to avoid floating-point rejection)
         risk = abs(signal.entry_price - signal.stop_loss)
         reward = abs(signal.take_profit - signal.entry_price)
-        if risk > 0 and reward / risk < settings.REWARD_RISK_RATIO - 0.01:
-            logger.info(f"R:R ratio too low: {reward/risk:.2f}")
+        min_rr = getattr(settings, "STRATEGY_REWARD_RISK_RATIO", {}).get(
+            signal.strategy, settings.REWARD_RISK_RATIO
+        )
+        if risk > 0 and reward / risk < min_rr - 0.01:
+            logger.info(f"R:R ratio too low: {reward/risk:.2f} < {min_rr} ({signal.strategy})")
             return False
 
         return True

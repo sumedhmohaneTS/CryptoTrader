@@ -151,9 +151,11 @@ class MeanReversionStrategy(BaseStrategy):
 
         confidence = max(0.0, min(1.0, confidence))
 
-        stop_loss = price - (atr * settings.STOP_LOSS_ATR_MULTIPLIER) if signal == Signal.BUY else price + (atr * settings.STOP_LOSS_ATR_MULTIPLIER)
+        sl_mult = getattr(settings, "STRATEGY_SL_ATR_MULTIPLIER", {}).get(self.name, settings.STOP_LOSS_ATR_MULTIPLIER)
+        rr_ratio = getattr(settings, "STRATEGY_REWARD_RISK_RATIO", {}).get(self.name, settings.REWARD_RISK_RATIO)
+        stop_loss = price - (atr * sl_mult) if signal == Signal.BUY else price + (atr * sl_mult)
         risk = abs(price - stop_loss)
-        take_profit = price + (risk * settings.REWARD_RISK_RATIO) if signal == Signal.BUY else price - (risk * settings.REWARD_RISK_RATIO)
+        take_profit = price + (risk * rr_ratio) if signal == Signal.BUY else price - (risk * rr_ratio)
 
         return TradeSignal(
             signal=signal,

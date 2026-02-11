@@ -355,8 +355,9 @@ class BacktestReporter:
         # Overall final state
         overall = tracker.get_overall_metrics()
         print()
-        print(f"  Overall:  Leverage={overrides.leverage_scale:.2f}x  "
-              f"SL={overrides.sl_atr_multiplier:.2f}  R:R={overrides.rr_ratio:.2f}")
+        sl_str = " ".join(f"{s}={v:.2f}" for s, v in overrides.sl_atr_multiplier.items())
+        rr_str = " ".join(f"{s}={v:.2f}" for s, v in overrides.rr_ratio.items())
+        print(f"  Overall:  Leverage={overrides.leverage_scale:.2f}x  SL=[{sl_str}]  R:R=[{rr_str}]")
         print(f"  Overall:  WR={overall.win_rate:.0%}  PF={overall.profit_factor:.2f}  "
               f"Trades={overall.trade_count}  Trend={overall.recent_trend:+.2f}")
 
@@ -365,7 +366,7 @@ class BacktestReporter:
         if adaptive_snapshots:
             print()
             print(f"  Adaptation Timeline (sampled every ~24h):")
-            print(f"  {'Time':<20} {'Lev':>5} {'SL':>5} {'R:R':>5} "
+            print(f"  {'Time':<20} {'Lev':>5} {'MR SL':>6} {'MR RR':>6} "
                   f"{'Mom':>6} {'MR':>6} {'BO':>6}")
             for snap in adaptive_snapshots[:10]:  # First 10 snapshots
                 ts = pd.Timestamp(snap["timestamp"]).strftime("%Y-%m-%d %H:%M")
@@ -379,8 +380,12 @@ class BacktestReporter:
                     mr_s = "OFF"
                 if not a["enabled"].get("breakout", True):
                     bo_s = "OFF"
+                sl_atr = a["sl_atr"]
+                rr_ratio = a["rr_ratio"]
+                mr_sl = sl_atr.get("mean_reversion", 0.8) if isinstance(sl_atr, dict) else sl_atr
+                mr_rr = rr_ratio.get("mean_reversion", 1.2) if isinstance(rr_ratio, dict) else rr_ratio
                 print(f"  {ts:<20} {a['leverage_scale']:>5.2f} "
-                      f"{a['sl_atr']:>5.2f} {a['rr_ratio']:>5.2f} "
+                      f"{mr_sl:>6.2f} {mr_rr:>6.2f} "
                       f"{mom_s:>6} {mr_s:>6} {bo_s:>6}")
 
     def plot_equity_curve(self, save_path: str | None = None):

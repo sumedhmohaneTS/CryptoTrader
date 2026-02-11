@@ -35,6 +35,18 @@ BOT_LOOP_INTERVAL_SECONDS = 60   # Check every 60s on 15m timeframe
 MAX_POSITION_PCT = 0.15          # 15% of portfolio per trade
 STOP_LOSS_ATR_MULTIPLIER = 1.5   # 1.5x ATR stop — proven optimal
 REWARD_RISK_RATIO = 2.0          # Fixed 2:1 R:R (hybrid trailing extends beyond this)
+
+# Per-strategy SL/R:R (mean_reversion needs tighter stops + lower target in ranges)
+STRATEGY_SL_ATR_MULTIPLIER = {
+    "momentum": 1.5,
+    "mean_reversion": 0.8,
+    "breakout": 1.5,
+}
+STRATEGY_REWARD_RISK_RATIO = {
+    "momentum": 2.0,
+    "mean_reversion": 1.2,
+    "breakout": 2.0,
+}
 DAILY_LOSS_LIMIT_PCT = 0.12      # Stop trading if down 12% in a day
 MAX_DRAWDOWN_PCT = 0.35          # Circuit breaker at 35% drawdown from peak
 MAX_OPEN_POSITIONS = 5           # Allow 5 concurrent positions

@@ -16,8 +16,8 @@ class AdaptiveOverrides:
     position_size_scale: dict[str, float] = field(default_factory=dict)  # per-strategy 0.15-2.0x
     strategy_enabled: dict[str, bool] = field(default_factory=dict)    # per-strategy on/off
     leverage_scale: float = 1.0          # global 0.6-1.0x
-    sl_atr_multiplier: float = 1.5       # replaces settings.STOP_LOSS_ATR_MULTIPLIER
-    rr_ratio: float = 2.0               # replaces settings.REWARD_RISK_RATIO
+    sl_atr_multiplier: dict[str, float] = field(default_factory=dict)  # per-strategy
+    rr_ratio: dict[str, float] = field(default_factory=dict)           # per-strategy
 
 
 # Default base confidence per strategy (from settings)
@@ -59,10 +59,10 @@ class AdaptiveController:
             overrides.min_confidence[strat] = self._compute_confidence(strat, metrics, has_data)
             overrides.position_size_scale[strat] = self._compute_size_scale(strat, metrics, has_data)
             overrides.strategy_enabled[strat] = True  # Never disable
+            overrides.sl_atr_multiplier[strat] = self._compute_sl_multiplier(strat, metrics, has_data)
+            overrides.rr_ratio[strat] = self._compute_rr_ratio(strat, metrics, has_data)
 
         overrides.leverage_scale = self._compute_leverage_scale(overall)
-        overrides.sl_atr_multiplier = self._compute_sl_multiplier(overall)
-        overrides.rr_ratio = self._compute_rr_ratio(overall, strategy_metrics)
 
         return overrides
 
@@ -182,63 +182,62 @@ class AdaptiveController:
 
         return max(0.6, min(1.0, scale))
 
-    def _compute_sl_multiplier(self, overall: StrategyMetrics) -> float:
+    def _compute_sl_multiplier(self, strategy: str, metrics: StrategyMetrics, has_data: bool) -> float:
         """
-        Adjust SL ATR multiplier based on overall win rate.
+        Adjust SL ATR multiplier per strategy based on win rate.
         High WR → tighter stops. Low WR → wider stops.
-        Range: 1.2 to 2.0 (narrower range to avoid over-adjustment).
+        Bounds relative to strategy base: floor=max(0.6, base*0.75), ceiling=min(2.5, base*1.5).
         """
-        has_data = len(self.tracker._all_trades) >= self.tracker.min_trades
-        base = settings.STOP_LOSS_ATR_MULTIPLIER  # 1.5
+        base = getattr(settings, "STRATEGY_SL_ATR_MULTIPLIER", {}).get(
+            strategy, settings.STOP_LOSS_ATR_MULTIPLIER
+        )
 
         if not has_data:
             return base
 
         # WR > 50% → tighten stops
-        if overall.win_rate > 0.50:
-            wr_excess = min(overall.win_rate - 0.50, 0.15) / 0.15
-            result = base - 0.15 * wr_excess  # 1.5 → 1.35
+        if metrics.win_rate > 0.50:
+            wr_excess = min(metrics.win_rate - 0.50, 0.15) / 0.15
+            result = base - (base * 0.10) * wr_excess
         # WR < 35% → widen stops
-        elif overall.win_rate < 0.35:
-            wr_deficit = min(0.35 - overall.win_rate, 0.15) / 0.15
-            result = base + 0.2 * wr_deficit  # 1.5 → 1.7
+        elif metrics.win_rate < 0.35:
+            wr_deficit = min(0.35 - metrics.win_rate, 0.15) / 0.15
+            result = base + (base * 0.15) * wr_deficit
         else:
             result = base
 
-        return max(1.2, min(2.0, result))
+        floor = max(0.6, base * 0.75)
+        ceiling = min(2.5, base * 1.5)
+        return max(floor, min(ceiling, result))
 
-    def _compute_rr_ratio(
-        self, overall: StrategyMetrics,
-        strategies: dict[str, StrategyMetrics]
-    ) -> float:
+    def _compute_rr_ratio(self, strategy: str, metrics: StrategyMetrics, has_data: bool) -> float:
         """
-        Adjust target R:R ratio based on what's actually being achieved.
-        Range: 1.5 to 2.5 (narrower to avoid being too aggressive).
+        Adjust target R:R ratio per strategy based on what's actually being achieved.
+        Bounds: floor=max(0.8, base*0.6), ceiling=min(3.0, base*1.5).
         """
-        has_data = len(self.tracker._all_trades) >= self.tracker.min_trades
-        base = settings.REWARD_RISK_RATIO  # 2.0
+        base = getattr(settings, "STRATEGY_REWARD_RISK_RATIO", {}).get(
+            strategy, settings.REWARD_RISK_RATIO
+        )
 
         if not has_data:
             return base
 
-        # Use the best-performing strategy's achieved R:R as signal
-        best_rr = 0.0
-        for strat, metrics in strategies.items():
-            if metrics.trade_count >= 5 and metrics.avg_rr_achieved > best_rr:
-                best_rr = metrics.avg_rr_achieved
+        achieved_rr = metrics.avg_rr_achieved
 
-        if best_rr > 2.5:
-            # Market is giving us good R:R — push target up slightly
-            rr_excess = min(best_rr - 2.5, 1.0) / 1.0
-            result = base + 0.3 * rr_excess  # 2.0 → 2.3
-        elif best_rr > 0 and best_rr < 1.5:
+        if achieved_rr > base * 1.25:
+            # Market giving good R:R for this strategy — push target up
+            rr_excess = min(achieved_rr - base * 1.25, base * 0.5) / (base * 0.5)
+            result = base + (base * 0.15) * rr_excess
+        elif achieved_rr > 0 and achieved_rr < base * 0.75:
             # Market is tight — lower target to capture more trades
-            rr_deficit = min(1.5 - best_rr, 1.0) / 1.0
-            result = base - 0.3 * rr_deficit  # 2.0 → 1.7
+            rr_deficit = min(base * 0.75 - achieved_rr, base * 0.5) / (base * 0.5)
+            result = base - (base * 0.15) * rr_deficit
         else:
             result = base
 
-        return max(1.5, min(2.5, result))
+        floor = max(0.8, base * 0.6)
+        ceiling = min(3.0, base * 1.5)
+        return max(floor, min(ceiling, result))
 
     def format_state(self, overrides: AdaptiveOverrides) -> str:
         """Format current adaptive state for logging."""
@@ -247,17 +246,18 @@ class AdaptiveController:
         for strat in ["momentum", "mean_reversion", "breakout"]:
             conf = overrides.min_confidence.get(strat, 0.0)
             size = overrides.position_size_scale.get(strat, 1.0)
+            sl = overrides.sl_atr_multiplier.get(strat, 1.5)
+            rr = overrides.rr_ratio.get(strat, 2.0)
             metrics = self.tracker.get_strategy_metrics(strat)
             lines.append(
-                f"  {strat:<16} conf={conf:.2f} size={size:.2f}x | "
+                f"  {strat:<16} conf={conf:.2f} size={size:.2f}x SL={sl:.2f} R:R={rr:.2f} | "
                 f"WR={metrics.win_rate:.0%} PF={metrics.profit_factor:.2f} "
                 f"trades={metrics.trade_count} streak={metrics.current_streak:+d}"
             )
 
         overall = self.tracker.get_overall_metrics()
         lines.append(
-            f"  OVERALL         lev={overrides.leverage_scale:.2f}x "
-            f"SL={overrides.sl_atr_multiplier:.2f} R:R={overrides.rr_ratio:.2f} | "
+            f"  OVERALL         lev={overrides.leverage_scale:.2f}x | "
             f"WR={overall.win_rate:.0%} PF={overall.profit_factor:.2f} "
             f"trades={overall.trade_count} trend={overall.recent_trend:+.2f}"
         )
