@@ -88,6 +88,13 @@ class TradingBot:
         free_balance = self.exchange.get_usdt_balance()
         prices = self._get_current_prices()
         total_value = self.portfolio.calculate_portfolio_value(free_balance, prices)
+        # Retry once if balance API failed on startup (prevents bad daily_starting_value)
+        if free_balance == 0 and self.mode == "live":
+            logger.warning("Balance API returned $0 on startup — retrying in 5s...")
+            import time
+            time.sleep(5)
+            free_balance = self.exchange.get_usdt_balance()
+            total_value = self.portfolio.calculate_portfolio_value(free_balance, prices)
         # Set initial_balance to total portfolio value so P&L is relative to start
         self.portfolio.initial_balance = total_value
         self.risk_manager.peak_portfolio_value = total_value
@@ -174,6 +181,11 @@ class TradingBot:
         usdt_balance = self.exchange.get_usdt_balance()
         prices = self._get_current_prices()
         total_value = self.portfolio.calculate_portfolio_value(usdt_balance, prices)
+
+        # Skip entire tick if balance API failed (returns 0) — prevents false halts
+        if usdt_balance == 0 and self.mode == "live":
+            logger.warning("Balance API returned $0 — skipping tick to prevent false halt")
+            return
 
         self.risk_manager.update_peak(total_value)
 
