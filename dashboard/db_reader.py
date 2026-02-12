@@ -202,6 +202,26 @@ def get_trade_stats() -> dict:
         conn.close()
 
 
+def get_derivatives_data() -> list[dict]:
+    """Get latest derivatives snapshot per symbol."""
+    conn = _get_conn()
+    try:
+        rows = conn.execute(
+            """SELECT d.* FROM derivatives_snapshots d
+               INNER JOIN (
+                   SELECT symbol, MAX(id) as max_id
+                   FROM derivatives_snapshots
+                   GROUP BY symbol
+               ) latest ON d.id = latest.max_id
+               ORDER BY d.symbol"""
+        ).fetchall()
+        return [_normalize_row(dict(r)) for r in rows]
+    except Exception:
+        return []
+    finally:
+        conn.close()
+
+
 def get_performance_report() -> dict:
     """Detailed performance metrics for deciding when to scale up."""
     conn = _get_conn()

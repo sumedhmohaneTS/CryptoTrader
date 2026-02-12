@@ -154,7 +154,32 @@ MTF_REGIME_CONFIRMATION = True              # Require higher TF to confirm trend
 MTF_REGIME_TF = "4h"                        # Which higher TF to check (4h recommended)
 MTF_REGIME_ADX_THRESHOLD = 22               # ADX threshold on higher TF (slightly lower than 15m's 25)
 
+# Derivatives data
+DERIVATIVES_ENABLED = True                 # Master switch for OI/funding filters
+OI_DELTA_WINDOW = 8                        # Bars to compute OI % change
+FUNDING_ZSCORE_WINDOW = 20                 # Periods for funding z-score
+FUNDING_ZSCORE_THRESHOLD = 2.0             # Flag crowded trades
+OI_SQUEEZE_THRESHOLD = 0.6                # Min squeeze_risk to flag
+DERIVATIVES_CACHE_TTL = 300                # Cache TTL in seconds (5 min)
+SQUEEZE_RISK_ATR_MULT = 1.2                # ATR threshold for squeeze detection
+SQUEEZE_RISK_OI_THRESHOLD = 0.6            # Min squeeze_risk score
+TREND_EXHAUSTION_OI_DELTA = -3.0           # OI drop % to downgrade trending
+
+# Overtrading protections
+POST_PROFIT_COOLDOWN_BARS = 0              # Disabled — hurts momentum re-entry (set 3 for conservative)
+REGIME_CHANGE_WAIT_BARS = 0                # Disabled for now — test with derivatives data first (set 2 for live)
+MAX_ENTRIES_PER_TICK = 2                   # Max 2 new positions opened on same bar
+
 # Adaptive regime system
+# Adaptive exits
+MOMENTUM_DECAY_EXIT = False                # Disabled — cuts winners too short in IS backtest (enable after live validation)
+TRAIL_VOL_SCALE = {
+    "volatile": 1.0,       # All 1.0 — tuning needs live derivatives data (volatile=1.4 helped IS but killed OOS)
+    "trending": 1.0,       # MUST stay 1.0 — tighter (0.9) killed momentum PnL (+34% → +3%)
+    "ranging": 1.0,        # Default
+    "squeeze_risk": 1.0,   # Only fires with derivatives data (live) — tune after live validation
+}
+
 ADAPTIVE_ENABLED = True                     # Master switch for live bot
 ADAPTIVE_LOOKBACK_TRADES = 50              # Rolling window per strategy (larger = smoother)
 ADAPTIVE_MIN_TRADES = 8                    # Min trades before adaptation kicks in

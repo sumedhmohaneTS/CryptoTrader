@@ -19,7 +19,11 @@ class StrategyManager:
             MarketRegime.TRENDING: MomentumStrategy(),
             MarketRegime.RANGING: MeanReversionStrategy(),
             MarketRegime.VOLATILE: BreakoutStrategy(),
+            MarketRegime.SQUEEZE_RISK: MeanReversionStrategy(),  # Don't chase false breakouts
         }
+        # Regime change tracking for wait guard
+        self._last_regime: dict[str, str] = {}
+        self._regime_change_bar: dict[str, int] = {}
 
     def get_signal(
         self,
@@ -29,14 +33,37 @@ class StrategyManager:
         funding_rate: float | None = None,
         ob_imbalance: float = 0.0,
         news_score: float = 0.0,
+        bar_index: int = 0,
+        derivatives_data: dict | None = None,
     ) -> tuple[TradeSignal, MarketRegime]:
-        regime = self.analyzer.classify(df)
+        regime = self.analyzer.classify(df, derivatives_data=derivatives_data)
 
         # MTF regime confirmation: downgrade TRENDING to RANGING if higher TF disagrees
         if regime == MarketRegime.TRENDING and higher_tf_data and getattr(settings, "MTF_REGIME_CONFIRMATION", False):
             regime = self._confirm_regime(regime, higher_tf_data)
 
-        strategy = self.strategies[regime]
+        # Regime change wait: hold off trading for N bars after regime transition
+        wait_bars = getattr(settings, "REGIME_CHANGE_WAIT_BARS", 0)
+        if wait_bars > 0 and bar_index > 0:
+            prev_regime = self._last_regime.get(symbol)
+            if prev_regime is not None and prev_regime != regime.value:
+                self._regime_change_bar[symbol] = bar_index
+                logger.info(
+                    f"REGIME CHANGE {symbol}: {prev_regime} → {regime.value}, "
+                    f"waiting {wait_bars} bars"
+                )
+            self._last_regime[symbol] = regime.value
+
+            change_bar = self._regime_change_bar.get(symbol, -wait_bars)
+            if bar_index - change_bar < wait_bars:
+                hold = TradeSignal(
+                    signal=Signal.HOLD, confidence=0.0, strategy="",
+                    symbol=symbol, entry_price=0, stop_loss=0, take_profit=0,
+                    reason=f"Regime change wait ({bar_index - change_bar}/{wait_bars})",
+                )
+                return hold, regime
+
+        strategy = self.strategies.get(regime, self.strategies[MarketRegime.RANGING])
 
         signal = strategy.analyze(df, symbol)
 
@@ -55,6 +82,10 @@ class StrategyManager:
         # Apply news sentiment
         if signal.signal != Signal.HOLD and abs(news_score) > 0.1:
             signal = self._apply_news_filter(signal, news_score)
+
+        # Apply derivatives filter (OI, funding z-score, squeeze, liquidation)
+        if signal.signal != Signal.HOLD and derivatives_data and getattr(settings, "DERIVATIVES_ENABLED", False):
+            signal = self._apply_derivatives_filter(signal, derivatives_data)
 
         logger.info(
             f"{symbol} | Regime: {regime.value} | Strategy: {strategy.name} | "
@@ -242,6 +273,60 @@ class StrategyManager:
         if adjustment != 0:
             new_conf = max(0.0, min(1.0, signal.confidence + adjustment))
             logger.info(f"NEWS FILTER: {adjustment:+.2f} confidence (score={news_score:+.2f})")
+            return TradeSignal(
+                signal=signal.signal, confidence=new_conf, strategy=signal.strategy,
+                symbol=signal.symbol, entry_price=signal.entry_price,
+                stop_loss=signal.stop_loss, take_profit=signal.take_profit,
+                reason=reason,
+            )
+        return signal
+
+    def _apply_derivatives_filter(self, signal: TradeSignal, deriv: dict) -> TradeSignal:
+        """
+        Filter signals using derivatives data (OI, funding z-score, squeeze, liquidation).
+        """
+        reason = signal.reason
+        adjustment = 0.0
+
+        oi_delta = deriv.get("oi_delta_pct", 0.0)
+        oi_direction = deriv.get("oi_direction", "neutral")
+        funding_z = deriv.get("funding_zscore", 0.0)
+        is_cascade = deriv.get("is_cascade", False)
+        squeeze = deriv.get("squeeze_risk", 0.0)
+
+        # Liquidation cascade → HOLD (wait for dust to settle)
+        if is_cascade:
+            logger.info(f"DERIVATIVES FILTER: Liquidation cascade detected — blocking signal")
+            return TradeSignal(
+                signal=Signal.HOLD, confidence=0.0, strategy=signal.strategy,
+                symbol=signal.symbol, entry_price=signal.entry_price,
+                stop_loss=0, take_profit=0,
+                reason="Blocked: liquidation cascade",
+            )
+
+        # OI falling + breakout signal → reduce confidence (no money behind move)
+        if oi_delta < -2.0 and signal.strategy == "breakout":
+            adjustment -= 0.15
+            reason += f"; OI falling ({oi_delta:+.1f}%), weak breakout"
+
+        # OI rising + direction aligned → boost confidence (real commitment)
+        elif oi_delta > 2.0:
+            if (signal.signal == Signal.BUY and oi_direction == "bullish") or \
+               (signal.signal == Signal.SELL and oi_direction == "bearish"):
+                adjustment += 0.10
+                reason += f"; OI rising ({oi_delta:+.1f}%), conviction"
+
+        # Crowded funding → reduce confidence
+        funding_threshold = getattr(settings, "FUNDING_ZSCORE_THRESHOLD", 2.0)
+        if abs(funding_z) > funding_threshold:
+            if (signal.signal == Signal.BUY and funding_z > 0) or \
+               (signal.signal == Signal.SELL and funding_z < 0):
+                adjustment -= 0.12
+                reason += f"; Crowded funding (z={funding_z:+.2f})"
+
+        if adjustment != 0:
+            new_conf = max(0.0, min(1.0, signal.confidence + adjustment))
+            logger.info(f"DERIVATIVES FILTER: {adjustment:+.2f} confidence (OI={oi_delta:+.1f}%, funding_z={funding_z:+.2f})")
             return TradeSignal(
                 signal=signal.signal, confidence=new_conf, strategy=signal.strategy,
                 symbol=signal.symbol, entry_price=signal.entry_price,

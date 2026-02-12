@@ -356,6 +356,12 @@ class BacktestEngine:
                         exit_price = position.take_profit
                         exit_reason = "take_profit"
 
+            # Momentum decay exit (backtest)
+            if exit_price is None and position.strategy == "momentum" and getattr(settings, "MOMENTUM_DECAY_EXIT", False):
+                if self._check_momentum_decay(position, candle, symbol, timestamp):
+                    exit_price = candle["close"]
+                    exit_reason = "momentum_decay"
+
             if exit_price is not None:
                 symbols_to_close.append((symbol, exit_price, exit_reason, timestamp))
             elif trailing_enabled:
@@ -374,6 +380,10 @@ class BacktestEngine:
         if position.initial_risk <= 0 or sl_mult <= 0:
             return
         trail_distance = position.initial_risk * (trail_mult / sl_mult)
+
+        # Vol-aware scaling: widen/tighten trail based on regime at entry
+        vol_scale = getattr(settings, "TRAIL_VOL_SCALE", {}).get(position.entry_regime, 1.0)
+        trail_distance *= vol_scale
 
         if position.side == "buy":
             # Update highest price from candle high
@@ -403,6 +413,31 @@ class BacktestEngine:
                 new_stop = position.lowest_price + trail_distance
                 if new_stop < position.stop_loss:
                     position.stop_loss = new_stop
+
+    def _check_momentum_decay(self, position: Position, candle: pd.Series, symbol: str, timestamp) -> bool:
+        """Check if momentum is decaying while position is in profit → early exit."""
+        current_price = candle["close"]
+        pnl = position.unrealized_pnl(current_price)
+        if pnl <= 0:
+            return False
+
+        # Only exit when profit exceeds 1.5x initial risk (don't cut small winners)
+        min_profit = position.initial_risk * 1.5 * position.quantity if position.initial_risk > 0 else 0
+        if pnl < min_profit:
+            return False
+
+        df = self._get_indicator_window(symbol, timestamp, lookback=30)
+        if df.empty or len(df) < 15:
+            return False
+
+        latest = df.iloc[-1]
+        macd_hist = latest.get("macd_histogram", 0)
+        rsi = latest.get(f"rsi_{settings.RSI_PERIOD}", 50)
+
+        if position.side == "buy":
+            return macd_hist < 0 and rsi < 40
+        else:
+            return macd_hist > 0 and rsi > 60
 
     def _rescan_pairs(self, timestamp, bar_idx: int):
         """Rescan universe and update active pairs list."""
@@ -484,8 +519,8 @@ class BacktestEngine:
         # Register stop-loss/win with risk manager for cooldown tracking
         if reason == "stop_loss":
             self.risk_manager.register_stop_loss(symbol, bar_index)
-        elif reason in ("take_profit", "trailing_stop"):
-            self.risk_manager.register_win()
+        elif reason in ("take_profit", "trailing_stop", "momentum_decay"):
+            self.risk_manager.register_win(symbol, bar_index)
 
         # Apply slippage to exit
         if position.side == "buy":
@@ -559,10 +594,14 @@ class BacktestEngine:
 
     def _analyze_and_trade(self, symbol: str, timestamp, bar_idx: int, portfolio_value: float):
         """Analyze a symbol and potentially open a new position."""
-        # Dynamic risk checks: cooldown, frequency, correlation
+        # Dynamic risk checks: cooldown, frequency, post-profit, clustering
         if self.risk_manager.check_cooldown(symbol, bar_idx):
             return
         if self.risk_manager.check_trade_frequency(bar_idx):
+            return
+        if self.risk_manager.check_post_profit_cooldown(symbol, bar_idx):
+            return
+        if self.risk_manager.check_trade_clustering(bar_idx):
             return
 
         # Get indicator window (last 200 bars)
@@ -584,6 +623,7 @@ class BacktestEngine:
             funding_rate=None,
             ob_imbalance=0.0,
             news_score=0.0,
+            bar_index=bar_idx,
         )
 
         # --- Adaptive overrides ---
@@ -684,6 +724,7 @@ class BacktestEngine:
             strategy=signal.strategy,
             confidence=signal.confidence,
             sl_atr_multiplier=sl_mult,
+            entry_regime=regime.value,
         )
         # Store entry time for trade records
         position._entry_time = timestamp

@@ -23,6 +23,7 @@ class Position:
     highest_price: float = 0.0          # Best price since entry (for longs)
     lowest_price: float = 0.0           # Best price since entry (for shorts)
     trailing_activated: bool = False     # True once breakeven trigger hit
+    entry_regime: str = ""              # Market regime at entry (for vol-aware trailing)
 
     def __post_init__(self):
         # Auto-compute initial_risk if not provided

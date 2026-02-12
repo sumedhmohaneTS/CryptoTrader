@@ -8,6 +8,7 @@ from core.exchange import Exchange
 from core.portfolio import Portfolio, Position
 from data.database import Database
 from data.fetcher import DataFetcher
+from data.derivatives import DerivativesService
 from data.news import NewsService
 from data.pair_scanner import PairScanner
 from risk.risk_manager import RiskManager
@@ -34,6 +35,9 @@ class TradingBot:
         self.strategy_manager = StrategyManager()
         self.risk_manager = RiskManager()
         self.news_service = NewsService()
+        self.derivatives_service = DerivativesService(
+            exchange=self.exchange._exchange if mode == "live" and self.exchange._exchange else None
+        )
         self.db = Database()
         self._tick_counter = 0  # Monotonic bar counter for cooldown tracking
 
@@ -65,6 +69,17 @@ class TradingBot:
 
     async def start(self):
         await self.db.connect()
+
+        # Load adaptive state from DB (survives restarts)
+        if self.adaptive_tracker is not None:
+            try:
+                lookback = getattr(settings, "ADAPTIVE_LOOKBACK_TRADES", 50)
+                history = await self.db.load_adaptive_trades(limit=lookback)
+                if history:
+                    count = self.adaptive_tracker.load_state(history)
+                    logger.info(f"Loaded {count} historical trades into adaptive tracker")
+            except Exception as e:
+                logger.warning(f"Could not load adaptive state: {e}")
 
         # Sync existing positions from exchange on startup
         if self.mode == "live":
@@ -349,10 +364,14 @@ class TradingBot:
         self, symbol: str, usdt_balance: float, portfolio_value: float
     ):
         try:
-            # Dynamic risk checks: cooldown and frequency cap
+            # Dynamic risk checks: cooldown, frequency, post-profit, clustering
             if self.risk_manager.check_cooldown(symbol, self._tick_counter):
                 return
             if self.risk_manager.check_trade_frequency(self._tick_counter):
+                return
+            if self.risk_manager.check_post_profit_cooldown(symbol, self._tick_counter):
+                return
+            if self.risk_manager.check_trade_clustering(self._tick_counter):
                 return
 
             df = self.fetcher.fetch_ohlcv(
@@ -379,13 +398,38 @@ class TradingBot:
             news_data = self.news_service.get_sentiment(self.pairs)
             news_score = news_data.get(symbol, {}).get("score", 0.0)
 
+            # Fetch derivatives data (OI, funding z-score, squeeze)
+            derivatives_data = None
+            if getattr(settings, "DERIVATIVES_ENABLED", False):
+                try:
+                    derivatives_data = self.derivatives_service.get_snapshot(symbol, df)
+                except Exception as e:
+                    logger.debug(f"Derivatives fetch failed for {symbol}: {e}")
+
             signal, regime = self.strategy_manager.get_signal(
                 df, symbol,
                 higher_tf_data=higher_tf_data,
                 funding_rate=funding_rate,
                 ob_imbalance=ob_imbalance,
                 news_score=news_score,
+                bar_index=self._tick_counter,
+                derivatives_data=derivatives_data,
             )
+
+            # Save derivatives snapshot for dashboard
+            if derivatives_data:
+                try:
+                    await self.db.save_derivatives_snapshot(
+                        symbol=symbol,
+                        oi_delta_pct=derivatives_data.get("oi_delta_pct", 0.0),
+                        oi_direction=derivatives_data.get("oi_direction", "neutral"),
+                        oi_zscore=derivatives_data.get("oi_zscore", 0.0),
+                        funding_zscore=derivatives_data.get("funding_zscore", 0.0),
+                        squeeze_risk=derivatives_data.get("squeeze_risk", 0.0),
+                        regime=regime.value,
+                    )
+                except Exception:
+                    pass  # Non-critical
 
             # Log strategy decision
             await self.db.log_strategy(
@@ -500,6 +544,7 @@ class TradingBot:
                     strategy=signal.strategy,
                     confidence=signal.confidence,
                     sl_atr_multiplier=sl_mult,
+                    entry_regime=regime.value,
                 )
                 self.portfolio.add_position(position)
                 self.risk_manager.record_trade_opened()
@@ -558,6 +603,11 @@ class TradingBot:
                 elif not trailing_enabled or not hybrid:
                     close_reason = "take_profit"
 
+            # Momentum decay exit: MACD + RSI signal fading while in profit
+            if not close_reason and position.strategy == "momentum" and getattr(settings, "MOMENTUM_DECAY_EXIT", False):
+                if self._check_momentum_decay(position, current_price):
+                    close_reason = "momentum_decay"
+
             if close_reason:
                 symbols_to_close.append((symbol, current_price, close_reason))
             elif trailing_enabled:
@@ -574,11 +624,13 @@ class TradingBot:
         sl_mult = position.sl_atr_multiplier if position.sl_atr_multiplier > 0 else getattr(settings, "STOP_LOSS_ATR_MULTIPLIER", 0.75)
 
         # Derive trail distance from initial risk
-        # initial_risk = SL_MULT * ATR, so ATR = initial_risk / SL_MULT
-        # trail_distance = TRAIL_MULT * ATR = initial_risk * (TRAIL_MULT / SL_MULT)
         if position.initial_risk <= 0 or sl_mult <= 0:
             return
         trail_distance = position.initial_risk * (trail_mult / sl_mult)
+
+        # Vol-aware scaling: widen/tighten trail based on regime at entry
+        vol_scale = getattr(settings, "TRAIL_VOL_SCALE", {}).get(position.entry_regime, 1.0)
+        trail_distance *= vol_scale
 
         if position.side == "buy":
             # Update highest price
@@ -635,6 +687,51 @@ class TradingBot:
                         f"(low: ${position.lowest_price:.4f})"
                     )
 
+    def _check_momentum_decay(self, position: Position, current_price: float) -> bool:
+        """Check if momentum is decaying while position is in profit → early exit."""
+        pnl = position.unrealized_pnl(current_price)
+        if pnl <= 0:
+            return False  # Only exit winners early
+
+        try:
+            df = self.fetcher.fetch_ohlcv(
+                position.symbol, settings.PRIMARY_TIMEFRAME, limit=30
+            )
+            if df.empty or len(df) < 15:
+                return False
+
+            from analysis.indicators import add_all_indicators
+            df = add_all_indicators(df)
+            latest = df.iloc[-1]
+
+            macd_hist = latest.get("macd_histogram", 0)
+            rsi = latest.get(f"rsi_{settings.RSI_PERIOD}", 50)
+
+            # Only exit when momentum is clearly exhausted (RSI extreme + MACD crossed)
+            # and profit exceeds 1.5x initial risk (don't exit small winners too early)
+            min_profit = position.initial_risk * 1.5 * position.quantity if position.initial_risk > 0 else 0
+            if pnl < min_profit:
+                return False
+
+            if position.side == "buy":
+                if macd_hist < 0 and rsi < 40:
+                    logger.info(
+                        f"MOMENTUM DECAY {position.symbol}: MACD_hist={macd_hist:.4f}, "
+                        f"RSI={rsi:.1f} (long in profit ${pnl:.2f})"
+                    )
+                    return True
+            else:
+                if macd_hist > 0 and rsi > 60:
+                    logger.info(
+                        f"MOMENTUM DECAY {position.symbol}: MACD_hist={macd_hist:.4f}, "
+                        f"RSI={rsi:.1f} (short in profit ${pnl:.2f})"
+                    )
+                    return True
+        except Exception as e:
+            logger.debug(f"Momentum decay check failed for {position.symbol}: {e}")
+
+        return False
+
     async def _close_position(self, symbol: str, close_price: float, reason: str):
         position = self.portfolio.get_position(symbol)
         if not position:
@@ -664,10 +761,10 @@ class TradingBot:
             # Register with risk manager for cooldown tracking
             if reason == "stop_loss":
                 self.risk_manager.register_stop_loss(symbol, self._tick_counter)
-            elif reason in ("take_profit", "trailing_stop"):
-                self.risk_manager.register_win()
+            elif reason in ("take_profit", "trailing_stop", "momentum_decay"):
+                self.risk_manager.register_win(symbol, self._tick_counter)
 
-            # Feed to adaptive tracker
+            # Feed to adaptive tracker + persist for restart recovery
             if self.adaptive_tracker is not None:
                 from adaptive.performance_tracker import TradeRecord
                 from datetime import datetime, timezone
@@ -686,6 +783,17 @@ class TradingBot:
                     risk=risk_val,
                     reward=reward_val,
                 ))
+                await self.db.save_adaptive_trade(
+                    strategy=position.strategy,
+                    symbol=symbol,
+                    side=position.side,
+                    pnl=pnl,
+                    pnl_pct=pnl_pct,
+                    exit_reason=reason,
+                    confidence=position.confidence,
+                    risk=risk_val,
+                    reward=reward_val,
+                )
 
             emoji = "+" if pnl >= 0 else ""
             logger.info(

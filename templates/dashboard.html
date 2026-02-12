@@ -148,6 +148,26 @@
         </div>
     </div>
 
+    <!-- Market Microstructure (Derivatives) -->
+    <div class="card mb-3" id="derivatives-card">
+        <div class="card-header"><i class="bi bi-activity"></i> Market Microstructure</div>
+        <div class="card-body p-0">
+            <div class="table-responsive">
+                <table class="table table-hover table-sm">
+                    <thead>
+                        <tr>
+                            <th>Symbol</th><th>OI Delta</th><th>OI Direction</th>
+                            <th>OI Z-Score</th><th>Funding Z</th><th>Squeeze Risk</th><th>Regime</th>
+                        </tr>
+                    </thead>
+                    <tbody id="derivatives-body">
+                        <tr><td colspan="7" class="text-center text-muted py-3">No derivatives data</td></tr>
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </div>
+
     <!-- Open Positions -->
     <div class="card mb-3">
         <div class="card-header"><i class="bi bi-wallet2"></i> Open Positions</div>
@@ -391,7 +411,7 @@ async function loadTrades() {
         <td class="${pnlCls(t.pnl)}">${pnlSign(t.pnl)}${usd(t.pnl)}</td>
         <td class="${pnlCls(t.pnl_pct)}">${pnlSign(t.pnl_pct)}${pct(t.pnl_pct)}</td>
         <td><span class="badge bg-info">${t.strategy||'--'}</span></td>
-        <td><span class="badge ${t.close_reason==='take_profit'?'bg-success':t.close_reason==='stop_loss'?'bg-danger':'bg-secondary'}">${t.close_reason||'--'}</span></td>
+        <td><span class="badge ${t.close_reason==='take_profit'?'bg-success':t.close_reason==='stop_loss'?'bg-danger':t.close_reason==='trailing_stop'?'bg-info':t.close_reason==='momentum_decay'?'bg-warning':'bg-secondary'}">${t.close_reason||'--'}</span></td>
     </tr>`).join('');
 }
 
@@ -584,6 +604,32 @@ async function loadPerformance() {
         </div>`;
 }
 
+async function loadDerivatives() {
+    const d = await api('/api/derivatives');
+    const tb = $('derivatives-body');
+    if (!d || d.length === 0) {
+        tb.innerHTML = '<tr><td colspan="7" class="text-center text-muted py-3">No derivatives data</td></tr>';
+        return;
+    }
+    tb.innerHTML = d.map(r => {
+        const oiColor = r.oi_delta_pct > 0 ? 'text-profit' : r.oi_delta_pct < 0 ? 'text-loss' : '';
+        const fundColor = Math.abs(r.funding_zscore) > 2 ? 'text-loss' : '';
+        const sqColor = r.squeeze_risk >= 0.6 ? 'text-warning' : '';
+        const regBadge = r.regime === 'squeeze_risk' ? 'bg-warning' :
+                         r.regime === 'trending' ? 'bg-success' :
+                         r.regime === 'volatile' ? 'bg-danger' : 'bg-secondary';
+        return `<tr>
+            <td><strong>${r.symbol}</strong></td>
+            <td class="${oiColor}">${r.oi_delta_pct > 0 ? '+' : ''}${r.oi_delta_pct?.toFixed(1) ?? '--'}%</td>
+            <td>${r.oi_direction || '--'}</td>
+            <td>${r.oi_zscore?.toFixed(2) ?? '--'}</td>
+            <td class="${fundColor}">${r.funding_zscore?.toFixed(2) ?? '--'}</td>
+            <td class="${sqColor}">${r.squeeze_risk != null ? (r.squeeze_risk * 100).toFixed(0) + '%' : '--'}</td>
+            <td><span class="badge ${regBadge}">${r.regime || '--'}</span></td>
+        </tr>`;
+    }).join('');
+}
+
 async function loadConfig() {
     const d = await api('/api/config');
     if (!d) return;
@@ -699,7 +745,7 @@ async function refreshAll() {
     await Promise.all([
         loadStatus(), loadPortfolio(), loadPositions(),
         loadRisk(), loadTrades(), loadStrategyLog(), loadEquity(),
-        loadPerformance(), loadConfig(),
+        loadPerformance(), loadConfig(), loadDerivatives(),
     ]);
     $('last-updated').textContent = 'Updated ' + new Date().toLocaleTimeString();
 }

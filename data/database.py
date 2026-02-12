@@ -66,6 +66,32 @@ class Database:
                 confidence REAL,
                 indicators TEXT
             );
+
+            CREATE TABLE IF NOT EXISTS adaptive_trades (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                timestamp TEXT NOT NULL,
+                strategy TEXT NOT NULL,
+                symbol TEXT NOT NULL,
+                side TEXT NOT NULL,
+                pnl REAL NOT NULL,
+                pnl_pct REAL NOT NULL,
+                exit_reason TEXT,
+                confidence REAL,
+                risk REAL,
+                reward REAL
+            );
+
+            CREATE TABLE IF NOT EXISTS derivatives_snapshots (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                timestamp TEXT NOT NULL,
+                symbol TEXT NOT NULL,
+                oi_delta_pct REAL,
+                oi_direction TEXT,
+                oi_zscore REAL,
+                funding_zscore REAL,
+                squeeze_risk REAL,
+                regime TEXT
+            );
         """
         )
         await self.db.commit()
@@ -190,6 +216,60 @@ class Database:
                 confidence,
                 json.dumps(indicators or {}),
             ),
+        )
+        await self.db.commit()
+
+    async def save_adaptive_trade(
+        self,
+        strategy: str,
+        symbol: str,
+        side: str,
+        pnl: float,
+        pnl_pct: float,
+        exit_reason: str,
+        confidence: float,
+        risk: float,
+        reward: float,
+    ):
+        now = datetime.now(timezone.utc).isoformat()
+        await self.db.execute(
+            """INSERT INTO adaptive_trades
+               (timestamp, strategy, symbol, side, pnl, pnl_pct,
+                exit_reason, confidence, risk, reward)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (now, strategy, symbol, side, pnl, pnl_pct,
+             exit_reason, confidence, risk, reward),
+        )
+        await self.db.commit()
+
+    async def load_adaptive_trades(self, limit: int = 50) -> list[dict]:
+        cursor = await self.db.execute(
+            "SELECT * FROM adaptive_trades ORDER BY id DESC LIMIT ?",
+            (limit,),
+        )
+        columns = [d[0] for d in cursor.description]
+        rows = await cursor.fetchall()
+        # Return in chronological order (oldest first)
+        return [dict(zip(columns, row)) for row in reversed(rows)]
+
+    async def save_derivatives_snapshot(
+        self,
+        symbol: str,
+        oi_delta_pct: float,
+        oi_direction: str,
+        oi_zscore: float,
+        funding_zscore: float,
+        squeeze_risk: float,
+        regime: str,
+    ):
+        now = datetime.now(timezone.utc).isoformat()
+        await self.db.execute(
+            """INSERT INTO derivatives_snapshots
+               (timestamp, symbol, oi_delta_pct, oi_direction,
+                oi_zscore, funding_zscore, squeeze_risk, regime)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+            (now, symbol, oi_delta_pct, oi_direction,
+             oi_zscore, funding_zscore, squeeze_risk, regime),
         )
         await self.db.commit()
 

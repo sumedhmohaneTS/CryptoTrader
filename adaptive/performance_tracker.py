@@ -58,6 +58,27 @@ class PerformanceTracker:
         self._overall_streak: int = 0
         self._overall_max_losing: int = 0
 
+    def load_state(self, trades: list[dict]):
+        """Replay historical trades from DB into rolling deques (startup recovery)."""
+        count = 0
+        for t in trades:
+            record = TradeRecord(
+                strategy=t["strategy"],
+                symbol=t["symbol"],
+                side=t["side"],
+                pnl=t["pnl"],
+                pnl_pct=t["pnl_pct"],
+                entry_time=datetime.fromisoformat(t["timestamp"]),
+                exit_time=datetime.fromisoformat(t["timestamp"]),
+                exit_reason=t.get("exit_reason", ""),
+                confidence=t.get("confidence", 0.0),
+                risk=t.get("risk", 0.0),
+                reward=t.get("reward", 0.0),
+            )
+            self.record_trade(record)
+            count += 1
+        return count
+
     def record_trade(self, trade: TradeRecord):
         """Record a closed trade. Call from _close_position()."""
         strategy = trade.strategy

@@ -8,7 +8,7 @@ from dashboard.bot_control import is_bot_running, start_bot, stop_bot
 from dashboard.db_reader import (
     get_portfolio_summary, get_open_trades, get_closed_trades,
     get_equity_data, get_strategy_log, get_risk_metrics, get_trade_stats,
-    get_performance_report,
+    get_performance_report, get_derivatives_data,
 )
 from dashboard.price_service import PriceService
 
@@ -90,6 +90,11 @@ def api_risk():
 @app.route("/api/performance")
 def api_performance():
     return jsonify(get_performance_report())
+
+
+@app.route("/api/derivatives")
+def api_derivatives():
+    return jsonify(get_derivatives_data())
 
 
 @app.route("/api/config")

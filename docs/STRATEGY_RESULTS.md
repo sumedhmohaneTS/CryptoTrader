@@ -441,6 +441,145 @@ All backtests run on **Nov 2025 - Feb 2026** (3 months) with **$100 initial bala
 
 ---
 
+## Test 14: Adaptive Regime System (OOS Jun-Oct 2025)
+
+**Date**: Feb 2026
+**Changes**: Added adaptive regime system (PerformanceTracker + AdaptiveController). Rolling deque(50) per strategy, adjusts sizing 0.15-2.0x based on WR/PF/streak. OOS test on unseen data.
+
+### Results
+
+| Metric | Value |
+|--------|-------|
+| **Return** | **-21.88%** |
+| Sharpe | -2.74 |
+| Trades | 367 |
+
+**Verdict**: Adaptive system cannot fix poor underlying signal quality in ranging markets. OOS still loses.
+
+---
+
+## Test 15: Adaptive Regime System (IS Nov 2025 - Feb 2026)
+
+**Date**: Feb 2026
+**Changes**: Same adaptive system as Test 14, tested on in-sample data.
+
+### Results
+
+| Metric | Value |
+|--------|-------|
+| **Return** | **+114.92%** |
+| Sharpe | **3.28** |
+| Trades | 255 |
+
+**Verdict**: Adaptive doubles IS returns by sizing up hot strategies (momentum 2.0x). But this IS result is not reliable for live — OOS tells the real story.
+
+---
+
+## Test 16: Per-Strategy SL/R:R + Adaptive (OOS Jun-Oct 2025)
+
+**Date**: Feb 2026
+**Changes**: Added per-strategy stop-loss and R:R parameters (MR: 0.8 ATR / 1.2 R:R, others unchanged). Tested OOS with adaptive.
+
+### Results
+
+| Metric | Value |
+|--------|-------|
+| **Return** | **-18.08%** |
+| Sharpe | -1.09 |
+| Trades | 359 |
+
+**Key finding**: MR improved dramatically — WR 57.8%, PF 0.87, +$4.78 (was PF 0.13). OOS improved 3.8pp vs Test 14.
+
+**Verdict**: Per-strategy SL/R:R is a genuine improvement. MR now profitable OOS.
+
+---
+
+## Test 17: Per-Strategy SL/R:R + Adaptive (IS Nov 2025 - Feb 2026)
+
+**Date**: Feb 2026
+**Changes**: Same as Test 16, tested on in-sample data.
+
+### Results
+
+| Metric | Value |
+|--------|-------|
+| **Return** | **+84.31%** |
+| Sharpe | 2.68 |
+| Trades | 321 |
+
+**Verdict**: IS slightly lower than Test 15 (+84% vs +115%) because MR trades more but slightly dilutes momentum edge.
+
+---
+
+## Test 18: Full Upgrade + MTF Regime Gating (CURRENT LIVE CONFIG)
+
+**Date**: Feb 2026
+**Changes**: Major infrastructure upgrade (6 phases) plus MTF regime gating. This is the current deployed configuration.
+
+**New features added** (all infrastructure — transparent when disabled):
+1. **Adaptive state persistence** — rolling trade history survives restarts
+2. **Overtrading protections** — trade clustering guard (MAX_ENTRIES_PER_TICK=2), post-profit cooldown (disabled), regime change wait (disabled)
+3. **Derivatives data pipeline** — OI, funding, squeeze detection for live trading
+4. **SQUEEZE_RISK regime** — new market regime using OI data (only fires with live derivatives data)
+5. **Adaptive exits** — vol-aware trail distance, momentum decay exit (both disabled — all TRAIL_VOL_SCALE=1.0)
+6. **Dashboard enhancements** — derivatives card, config display, adaptive state
+7. **MTF regime gating** — downgrades TRENDING→RANGING when 4h ADX < 22
+
+| Setting | Value |
+|---------|-------|
+| Leverage | 25x |
+| Timeframe | 15m |
+| Pairs | BTC, SOL, XRP, DOGE, AVAX, SUI, RENDER, LINK, AXS, ZEC (10 pairs) |
+| Position size | 15% |
+| Per-strategy SL | momentum 1.5 ATR, mean_reversion 0.8 ATR, breakout 1.5 ATR |
+| Per-strategy R:R | momentum 2.0, mean_reversion 1.2, breakout 2.0 |
+| Trailing | Hybrid, breakeven at 1.0 R:R, 1.5 ATR trail |
+| Max positions | 5 |
+| Adaptive | Enabled, 50-trade rolling window |
+| MTF regime gating | 4h ADX < 22 → downgrade TRENDING to RANGING |
+
+### IS Results (Nov 2025 - Feb 2026)
+
+| Metric | Value |
+|--------|-------|
+| **Return** | **+34.61%** |
+| Sharpe | **1.66** |
+| Profit Factor | 1.22 |
+| Max Drawdown | 29.80% |
+| Trades | 299 |
+| Win Rate | 53.2% |
+| Expectancy | $0.169/trade |
+| Fees | $31.99 |
+
+**Per-strategy PnL**: Momentum +$60.92 (157 trades), MR -$7.04 (107 trades), Breakout -$3.27 (35 trades)
+
+### OOS Results (Jun - Oct 2025)
+
+| Metric | Value |
+|--------|-------|
+| **Return** | **+42.26%** |
+| Sharpe | **1.29** |
+| Profit Factor | **1.42** |
+| Max Drawdown | 24.03% |
+| Trades | 385 |
+| Win Rate | 50.1% |
+| Expectancy | $0.142/trade |
+| Fees | $24.82 |
+
+**Per-strategy PnL**: MR +$71.69 (183 trades), Breakout +$1.87 (41 trades), Momentum -$18.90 (161 trades)
+
+### Why IS Dropped but OOS Surged
+
+The MTF regime gating is the key change. It blocks momentum from trading when 4h ADX < 22 (not trending on higher timeframe), which:
+- **IS**: Reduces momentum trades, dropping from +$80.75 to +$60.92 (-25%). Total return -18pp vs Test 11.
+- **OOS**: Prevents momentum from losing money in ranging markets. MR takes over and earns +$71.69. Total return swung from -18% to +42%.
+
+This is a **robustness-for-returns tradeoff**: we give up ~18pp IS to gain ~60pp OOS. A bot that profits in both IS and OOS is far more reliable than one that crushes IS but bleeds OOS.
+
+**Verdict**: Best overall configuration. First to be profitable in BOTH IS and OOS. Deployed to live trading Feb 11, 2026.
+
+---
+
 ## Summary: All Tests Comparison
 
 | Test | Config | Return | Sharpe | Trades | Win Rate | Max DD | PF |
@@ -455,8 +594,14 @@ All backtests run on **Nov 2025 - Feb 2026** (3 months) with **$100 initial bala
 | 8 | 15x, 15m, 12 pairs (added FIL/WIF) | +19.35% | 1.84 | 333 | 47.7% | 21.63% | 1.26 |
 | 9 | 20x, 15m, 10 pairs, momentum 0.75 | +41.73% | 2.25 | 343 | 46.9% | 23.08% | 1.30 |
 | 10 | 22x, 15m, momentum 0.78 | +45.42% | 2.36 | 299 | 48.8% | 23.05% | 1.34 |
-| **11** | **25x, 15m, 10 pairs, momentum 0.78** | **+52.86%** | **2.46** | **299** | **48.8%** | **23.83%** | **1.34** |
+| 11 | 25x, 15m, 10 pairs, momentum 0.78 | +52.86% | 2.46 | 299 | 48.8% | 23.83% | 1.34 |
 | 12 | 25x, 15m, smart rotation (hysteresis) | +28.01% | 2.03 | 275 | 48.0% | 23.86% | — |
+| 14 | 25x, 15m, adaptive (OOS Jun-Oct) | -21.88% | -2.74 | 367 | — | — | — |
+| 15 | 25x, 15m, adaptive (IS Nov-Feb) | +114.92% | 3.28 | 255 | — | — | — |
+| 16 | 25x, 15m, per-strategy SL/RR + adaptive (OOS) | -18.08% | -1.09 | 359 | — | — | — |
+| 17 | 25x, 15m, per-strategy SL/RR + adaptive (IS) | +84.31% | 2.68 | 321 | — | — | — |
+| **18** | **25x, 15m, MTF gating + full upgrade (IS)** | **+34.61%** | **1.66** | **299** | **53.2%** | **29.80%** | **1.22** |
+| **18** | **25x, 15m, MTF gating + full upgrade (OOS)** | **+42.26%** | **1.29** | **385** | **50.1%** | **24.03%** | **1.42** |
 
 ---
 
@@ -482,7 +627,14 @@ All backtests run on **Nov 2025 - Feb 2026** (3 months) with **$100 initial bala
 18. **Max drawdown scales with leverage** -- 8.7% at 15x -> 23.8% at 25x (proportional)
 19. **Smart rotation (hysteresis) >> naive rotation** -- +28% vs -2.89%, but still < static (+53%)
 20. **Use rotation for discovery, not live trading** -- find new pairs, then manually update config
+21. **NEVER disable strategies — only throttle via sizing** -- momentum gets disabled at WR=23% but earns +$35; use 0.15x size floor instead
+22. **Adaptive system doubles IS returns** -- +114.92% vs +52.86% static (2.0x sizing for hot strategies)
+23. **Per-strategy SL/R:R is critical** -- MR with 0.8 ATR / 1.2 R:R: WR 57.8%, PF 0.87 (was PF 0.13)
+24. **MTF regime gating is the most impactful robustness feature** -- trades -18pp IS for +60pp OOS improvement
+25. **OOS profitability > IS return** -- a config that profits in both IS and OOS is far more reliable
+26. **TRAIL_VOL_SCALE is extremely dangerous to tune** -- trending=0.9 killed IS (+34%→+3%); volatile=1.4 killed OOS (+42%→+1%)
+27. **All new infrastructure features are transparent** -- derivatives, SQUEEZE_RISK, adaptive exits produce identical results when disabled
 
-## Best Configuration (Test 11 -- LIVE)
+## Best Configuration (Test 18 -- LIVE)
 
-25x leverage, 15m timeframe, hybrid trailing stops (breakeven at 1.0 R:R), 10 pairs (BTC, SOL, XRP, DOGE, AVAX, SUI, RENDER, LINK, AXS, ZEC), 15% position size, 5 max positions, momentum confidence 0.78. **Return: +52.86%, Sharpe: 2.46.**
+25x leverage, 15m timeframe, hybrid trailing stops (breakeven at 1.0 R:R), 10 static pairs, 15% position size, 5 max positions, per-strategy SL/R:R, adaptive sizing, MTF regime gating (4h ADX < 22). **IS: +34.61% (Sharpe 1.66), OOS: +42.26% (Sharpe 1.29).** First config profitable in both IS and OOS.

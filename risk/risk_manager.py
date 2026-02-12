@@ -19,6 +19,11 @@ class RiskManager:
         self._hour_start_bar: int = 0
         self._trades_today: int = 0
 
+        # Overtrading guards
+        self._last_win_bar: dict[str, int] = {}         # symbol -> bar index of last win
+        self._entries_this_tick: int = 0
+        self._current_tick_bar: int = -1
+
     def reset_daily(self, portfolio_value: float):
         self.daily_starting_value = portfolio_value
         self.trading_halted = False
@@ -38,9 +43,11 @@ class RiskManager:
             f"(consecutive losses: {self._consecutive_losses})"
         )
 
-    def register_win(self):
+    def register_win(self, symbol: str = "", bar_index: int = 0):
         """Reset consecutive loss counter on a winning trade."""
         self._consecutive_losses = 0
+        if symbol:
+            self._last_win_bar[symbol] = bar_index
 
     def check_cooldown(self, symbol: str, bar_index: int) -> bool:
         """Return True if the symbol is still in cooldown after a stop-loss."""
@@ -84,9 +91,10 @@ class RiskManager:
         return False
 
     def record_trade_opened(self):
-        """Increment the hourly and daily trade counters."""
+        """Increment the hourly, daily, and per-tick trade counters."""
         self._trades_this_hour += 1
         self._trades_today += 1
+        self._entries_this_tick += 1
 
     def check_correlation_exposure(self, side: str, positions: dict) -> bool:
         """
@@ -100,6 +108,33 @@ class RiskManager:
                 f"Correlation cap: already {same_direction} {side} position(s), "
                 f"max {max_same}"
             )
+            return True
+        return False
+
+    def check_post_profit_cooldown(self, symbol: str, bar_index: int) -> bool:
+        """Return True if symbol is in post-profit cooldown (should block trade)."""
+        cooldown = getattr(settings, "POST_PROFIT_COOLDOWN_BARS", 0)
+        if cooldown <= 0:
+            return False
+        last_win = self._last_win_bar.get(symbol)
+        if last_win is None:
+            return False
+        bars_since = bar_index - last_win
+        if bars_since < cooldown:
+            logger.info(
+                f"{symbol} post-profit cooldown: {bars_since}/{cooldown} bars since win"
+            )
+            return True
+        return False
+
+    def check_trade_clustering(self, bar_index: int) -> bool:
+        """Return True if too many entries on same bar (should block trade)."""
+        max_entries = getattr(settings, "MAX_ENTRIES_PER_TICK", 2)
+        if bar_index != self._current_tick_bar:
+            self._current_tick_bar = bar_index
+            self._entries_this_tick = 0
+        if self._entries_this_tick >= max_entries:
+            logger.info(f"Trade clustering cap: {self._entries_this_tick} entries on bar {bar_index}")
             return True
         return False
 
