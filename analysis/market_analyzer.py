@@ -11,6 +11,8 @@ logger = setup_logger("market_analyzer")
 
 class MarketRegime(Enum):
     TRENDING = "trending"
+    TRENDING_STRONG = "trending_strong"
+    TRENDING_WEAK = "trending_weak"
     RANGING = "ranging"
     VOLATILE = "volatile"
     SQUEEZE_RISK = "squeeze_risk"

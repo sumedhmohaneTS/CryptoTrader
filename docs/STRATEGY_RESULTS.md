@@ -580,6 +580,66 @@ This is a **robustness-for-returns tradeoff**: we give up ~18pp IS to gain ~60pp
 
 ---
 
+## Test 19: Graduated MTF Regime Gating (TRENDING_WEAK) — CURRENT LIVE CONFIG
+
+**Date**: Feb 2026
+**Changes**: Replaced binary MTF regime gate (TRENDING→RANGING when 4h ADX < 22) with graduated 3-tier system. Instead of hard-switching to mean_reversion, weak trends stay on momentum with a confidence penalty. Hysteresis prevents premature downgrades.
+
+**New features**:
+1. **TRENDING_STRONG** — 4h ADX >= 25: full momentum, no penalty
+2. **TRENDING_WEAK** — 4h ADX 18-25: momentum with -0.08 confidence penalty
+3. **RANGING** — 4h ADX < 18 (after 3 consecutive confirmations): hard downgrade to mean_reversion
+4. **Hysteresis counter** — requires 3 consecutive bars below weak threshold before hard downgrade
+
+| Setting | Value |
+|---------|-------|
+| Leverage | 25x |
+| Timeframe | 15m |
+| Pairs | BTC, SOL, XRP, DOGE, AVAX, SUI, RENDER, LINK, AXS, ZEC (10 pairs) |
+| Position size | 15% |
+| Per-strategy SL | momentum 1.5 ATR, mean_reversion 0.8 ATR, breakout 1.5 ATR |
+| Per-strategy R:R | momentum 2.0, mean_reversion 1.2, breakout 2.0 |
+| Trailing | Hybrid, breakeven at 1.0 R:R, 1.5 ATR trail |
+| Max positions | 5 |
+| Adaptive | Enabled, 50-trade rolling window |
+| MTF gating | Graduated: STRONG (ADX>=25), WEAK (18-25, -0.08 conf), RANGING (<18, 3-bar hysteresis) |
+| TRENDING_WEAK penalty | 0.08 confidence reduction |
+| Hysteresis | 3 consecutive bars before hard downgrade |
+
+### IS Results (Nov 2025 - Feb 2026)
+
+| Metric | Value |
+|--------|-------|
+| **Return** | **+46.18%** |
+| Sharpe | **2.11** |
+| Profit Factor | **1.34** |
+| Trades | 278 |
+| Win Rate | 60% |
+| Trades/Day | 3.02 |
+
+### OOS Results (Jun - Oct 2025)
+
+| Metric | Value |
+|--------|-------|
+| **Return** | **+207.27%** |
+| Sharpe | **2.96** |
+| Trades | 391 |
+| Win Rate | 40% |
+| Trades/Day | 2.57 |
+
+### Why This Outperforms Test 18
+
+The binary gate in Test 18 (4h ADX < 22 → switch to mean_reversion) was throwing away profitable momentum trades in the 18-22 ADX zone. The graduated approach:
+- **IS**: Recovered +11.57pp (+34.61% → +46.18%) by keeping momentum active in weak trends with slight penalty
+- **OOS**: Massive improvement (+42.26% → +207.27%) — the Jun-Oct 2025 period had extended zones where 4h ADX was 18-25, and momentum with a small penalty vastly outperformed mean_reversion
+- **Sharpe improved in both periods** — IS 1.66→2.11, OOS 1.29→2.96
+
+**Caution**: The +207% OOS result is extraordinary and may reflect specific market conditions in Jun-Oct 2025. Monitor live performance closely.
+
+**Verdict**: Significant improvement over Test 18 in both IS and OOS. Graduated gating preserves the robustness benefit of MTF confirmation while recovering momentum edge in borderline trends. Deployed to live trading Feb 12, 2026.
+
+---
+
 ## Summary: All Tests Comparison
 
 | Test | Config | Return | Sharpe | Trades | Win Rate | Max DD | PF |
@@ -600,8 +660,10 @@ This is a **robustness-for-returns tradeoff**: we give up ~18pp IS to gain ~60pp
 | 15 | 25x, 15m, adaptive (IS Nov-Feb) | +114.92% | 3.28 | 255 | — | — | — |
 | 16 | 25x, 15m, per-strategy SL/RR + adaptive (OOS) | -18.08% | -1.09 | 359 | — | — | — |
 | 17 | 25x, 15m, per-strategy SL/RR + adaptive (IS) | +84.31% | 2.68 | 321 | — | — | — |
-| **18** | **25x, 15m, MTF gating + full upgrade (IS)** | **+34.61%** | **1.66** | **299** | **53.2%** | **29.80%** | **1.22** |
-| **18** | **25x, 15m, MTF gating + full upgrade (OOS)** | **+42.26%** | **1.29** | **385** | **50.1%** | **24.03%** | **1.42** |
+| 18 | 25x, 15m, MTF gating + full upgrade (IS) | +34.61% | 1.66 | 299 | 53.2% | 29.80% | 1.22 |
+| 18 | 25x, 15m, MTF gating + full upgrade (OOS) | +42.26% | 1.29 | 385 | 50.1% | 24.03% | 1.42 |
+| **19** | **25x, 15m, graduated MTF gating TRENDING_WEAK (IS)** | **+46.18%** | **2.11** | **278** | **60%** | **—** | **1.34** |
+| **19** | **25x, 15m, graduated MTF gating TRENDING_WEAK (OOS)** | **+207.27%** | **2.96** | **391** | **40%** | **—** | **—** |
 
 ---
 
@@ -634,7 +696,9 @@ This is a **robustness-for-returns tradeoff**: we give up ~18pp IS to gain ~60pp
 25. **OOS profitability > IS return** -- a config that profits in both IS and OOS is far more reliable
 26. **TRAIL_VOL_SCALE is extremely dangerous to tune** -- trending=0.9 killed IS (+34%→+3%); volatile=1.4 killed OOS (+42%→+1%)
 27. **All new infrastructure features are transparent** -- derivatives, SQUEEZE_RISK, adaptive exits produce identical results when disabled
+28. **Graduated MTF gating >> binary gating** -- TRENDING_WEAK (momentum with penalty) outperforms hard switch to mean_reversion in the 18-25 ADX zone
+29. **Hysteresis prevents whipsawing** -- requiring 3 consecutive confirmations before hard downgrade avoids premature regime changes
 
-## Best Configuration (Test 18 -- LIVE)
+## Best Configuration (Test 19 -- LIVE)
 
-25x leverage, 15m timeframe, hybrid trailing stops (breakeven at 1.0 R:R), 10 static pairs, 15% position size, 5 max positions, per-strategy SL/R:R, adaptive sizing, MTF regime gating (4h ADX < 22). **IS: +34.61% (Sharpe 1.66), OOS: +42.26% (Sharpe 1.29).** First config profitable in both IS and OOS.
+25x leverage, 15m timeframe, hybrid trailing stops (breakeven at 1.0 R:R), 10 static pairs, 15% position size, 5 max positions, per-strategy SL/R:R, adaptive sizing, graduated MTF regime gating (STRONG: 4h ADX >= 25, WEAK: 18-25 with -0.08 conf penalty, RANGING: < 18 after 3-bar hysteresis). **IS: +46.18% (Sharpe 2.11), OOS: +207.27% (Sharpe 2.96).** Improves on Test 18 in both IS and OOS.

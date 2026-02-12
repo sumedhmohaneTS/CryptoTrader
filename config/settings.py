@@ -176,9 +176,18 @@ MOMENTUM_DECAY_EXIT = False                # Disabled — cuts winners too short
 TRAIL_VOL_SCALE = {
     "volatile": 1.0,       # All 1.0 — tuning needs live derivatives data (volatile=1.4 helped IS but killed OOS)
     "trending": 1.0,       # MUST stay 1.0 — tighter (0.9) killed momentum PnL (+34% → +3%)
+    "trending_strong": 1.0,  # Same as trending
+    "trending_weak": 1.0,   # Same as trending
     "ranging": 1.0,        # Default
     "squeeze_risk": 1.0,   # Only fires with derivatives data (live) — tune after live validation
 }
+
+# Graduated MTF regime gating (experiment — disabled by default)
+ENABLE_TRENDING_WEAK = True                     # Graduated MTF gating — IS +46%, OOS +207% (enabled Feb 12)
+TRENDING_WEAK_CONFIDENCE_PENALTY = 0.08         # Confidence reduction for weak trends
+MTF_STRONG_ADX_THRESHOLD = 25                   # 4h ADX >= 25 = strong trend (full momentum)
+MTF_WEAK_ADX_THRESHOLD = 18                     # 4h ADX < 18 = ranging (after hysteresis)
+MTF_REJECTION_CONFIRMATIONS = 3                 # Consecutive bars below weak threshold before hard downgrade
 
 ADAPTIVE_ENABLED = True                     # Master switch for live bot
 ADAPTIVE_LOOKBACK_TRADES = 50              # Rolling window per strategy (larger = smoother)

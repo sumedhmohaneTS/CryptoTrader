@@ -17,6 +17,8 @@ class StrategyManager:
         self.analyzer = MarketAnalyzer()
         self.strategies = {
             MarketRegime.TRENDING: MomentumStrategy(),
+            MarketRegime.TRENDING_STRONG: MomentumStrategy(),
+            MarketRegime.TRENDING_WEAK: MomentumStrategy(),
             MarketRegime.RANGING: MeanReversionStrategy(),
             MarketRegime.VOLATILE: BreakoutStrategy(),
             MarketRegime.SQUEEZE_RISK: MeanReversionStrategy(),  # Don't chase false breakouts
@@ -24,6 +26,8 @@ class StrategyManager:
         # Regime change tracking for wait guard
         self._last_regime: dict[str, str] = {}
         self._regime_change_bar: dict[str, int] = {}
+        # Hysteresis counter for graduated MTF gating
+        self._htf_rejection_count: dict[str, int] = {}
 
     def get_signal(
         self,
@@ -40,7 +44,7 @@ class StrategyManager:
 
         # MTF regime confirmation: downgrade TRENDING to RANGING if higher TF disagrees
         if regime == MarketRegime.TRENDING and higher_tf_data and getattr(settings, "MTF_REGIME_CONFIRMATION", False):
-            regime = self._confirm_regime(regime, higher_tf_data)
+            regime = self._confirm_regime(regime, higher_tf_data, symbol=symbol)
 
         # Regime change wait: hold off trading for N bars after regime transition
         wait_bars = getattr(settings, "REGIME_CHANGE_WAIT_BARS", 0)
@@ -66,6 +70,18 @@ class StrategyManager:
         strategy = self.strategies.get(regime, self.strategies[MarketRegime.RANGING])
 
         signal = strategy.analyze(df, symbol)
+
+        # Apply TRENDING_WEAK confidence penalty
+        if regime == MarketRegime.TRENDING_WEAK and signal.signal != Signal.HOLD:
+            penalty = getattr(settings, "TRENDING_WEAK_CONFIDENCE_PENALTY", 0.08)
+            new_conf = max(0.0, signal.confidence - penalty)
+            logger.info(f"TRENDING_WEAK penalty: -{penalty:.2f} confidence ({signal.confidence:.2f}→{new_conf:.2f})")
+            signal = TradeSignal(
+                signal=signal.signal, confidence=new_conf, strategy=signal.strategy,
+                symbol=signal.symbol, entry_price=signal.entry_price,
+                stop_loss=signal.stop_loss, take_profit=signal.take_profit,
+                reason=signal.reason + f"; trending_weak penalty (-{penalty:.2f})",
+            )
 
         # Apply multi-timeframe filter
         if signal.signal != Signal.HOLD and higher_tf_data:
@@ -95,8 +111,18 @@ class StrategyManager:
 
         return signal, regime
 
-    def _confirm_regime(self, regime: MarketRegime, higher_tf_data: dict[str, pd.DataFrame]) -> MarketRegime:
-        """Downgrade TRENDING to RANGING if higher TF is not trending."""
+    def _confirm_regime(
+        self, regime: MarketRegime, higher_tf_data: dict[str, pd.DataFrame],
+        symbol: str = "",
+    ) -> MarketRegime:
+        """Downgrade TRENDING to RANGING if higher TF is not trending.
+
+        When ENABLE_TRENDING_WEAK is True, uses graduated 3-tier gating:
+          - 4h ADX >= MTF_STRONG_ADX_THRESHOLD → TRENDING_STRONG (full momentum)
+          - 4h ADX >= MTF_WEAK_ADX_THRESHOLD   → TRENDING_WEAK (momentum with confidence penalty)
+          - 4h ADX <  MTF_WEAK_ADX_THRESHOLD   → RANGING (after hysteresis confirmation)
+        When False, uses original binary gate (ADX < 22 → RANGING).
+        """
         confirm_tf = getattr(settings, "MTF_REGIME_TF", "4h")
         htf_df = higher_tf_data.get(confirm_tf)
         if htf_df is None or (hasattr(htf_df, 'empty') and htf_df.empty):
@@ -110,6 +136,47 @@ class StrategyManager:
         adx_col = f"ADX_{settings.ADX_PERIOD}"
         htf_adx = htf_df.iloc[-1].get(adx_col, 0)
 
+        # Graduated gating (experiment)
+        if getattr(settings, "ENABLE_TRENDING_WEAK", False):
+            strong_threshold = getattr(settings, "MTF_STRONG_ADX_THRESHOLD", 25)
+            weak_threshold = getattr(settings, "MTF_WEAK_ADX_THRESHOLD", 18)
+            confirmations_needed = getattr(settings, "MTF_REJECTION_CONFIRMATIONS", 3)
+
+            if htf_adx >= strong_threshold:
+                self._htf_rejection_count[symbol] = 0
+                logger.info(
+                    f"MTF REGIME: TRENDING→TRENDING_STRONG "
+                    f"({confirm_tf} ADX={htf_adx:.1f} >= {strong_threshold})"
+                )
+                return MarketRegime.TRENDING_STRONG
+
+            elif htf_adx >= weak_threshold:
+                self._htf_rejection_count[symbol] = 0
+                logger.info(
+                    f"MTF REGIME: TRENDING→TRENDING_WEAK "
+                    f"({confirm_tf} ADX={htf_adx:.1f}, {weak_threshold}-{strong_threshold})"
+                )
+                return MarketRegime.TRENDING_WEAK
+
+            else:
+                # Below weak threshold — increment hysteresis counter
+                count = self._htf_rejection_count.get(symbol, 0) + 1
+                self._htf_rejection_count[symbol] = count
+                if count >= confirmations_needed:
+                    logger.info(
+                        f"MTF REGIME: TRENDING→RANGING "
+                        f"({confirm_tf} ADX={htf_adx:.1f} < {weak_threshold}, "
+                        f"{count}/{confirmations_needed} confirmations)"
+                    )
+                    return MarketRegime.RANGING
+                else:
+                    logger.info(
+                        f"MTF REGIME: TRENDING→TRENDING_WEAK (hysteresis "
+                        f"{count}/{confirmations_needed}, {confirm_tf} ADX={htf_adx:.1f})"
+                    )
+                    return MarketRegime.TRENDING_WEAK
+
+        # Original binary gate (default behavior)
         threshold = getattr(settings, "MTF_REGIME_ADX_THRESHOLD", 22)
         if htf_adx < threshold:
             logger.info(
