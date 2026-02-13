@@ -47,6 +47,7 @@ STRATEGY_REWARD_RISK_RATIO = {
     "mean_reversion": 1.2,
     "breakout": 2.0,
 }
+MIN_SL_DISTANCE_PCT = 0.015      # Reject signals with SL < 1.5% from entry (noise floor at 25x)
 DAILY_LOSS_LIMIT_PCT = 0.12      # Stop trading if down 12% in a day
 MAX_DRAWDOWN_PCT = 0.35          # Circuit breaker at 35% drawdown from peak
 MAX_OPEN_POSITIONS = 5           # Allow 5 concurrent positions

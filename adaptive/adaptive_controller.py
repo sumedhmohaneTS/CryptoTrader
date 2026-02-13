@@ -13,7 +13,7 @@ logger = setup_logger("adaptive_controller")
 class AdaptiveOverrides:
     """Parameter overrides computed from live performance."""
     min_confidence: dict[str, float] = field(default_factory=dict)     # per-strategy
-    position_size_scale: dict[str, float] = field(default_factory=dict)  # per-strategy 0.15-2.0x
+    position_size_scale: dict[str, float] = field(default_factory=dict)  # per-strategy 0.15-1.2x
     strategy_enabled: dict[str, bool] = field(default_factory=dict)    # per-strategy on/off
     leverage_scale: float = 1.0          # global 0.6-1.0x
     sl_atr_multiplier: dict[str, float] = field(default_factory=dict)  # per-strategy
@@ -113,20 +113,16 @@ class AdaptiveController:
         """
         Scale position size based on profit factor, streak, and trend.
         This is the PRIMARY adaptation lever — replaces strategy disable.
-        Range: 0.15x to 2.0x
+        Range: 0.15x to 1.2x (capped from 2.0x to prevent exponential loss spirals)
         """
         if not has_data:
             return 1.0
 
         scale = 1.0
 
-        # Profit factor scaling — aggressive upscaling for winners
-        if metrics.profit_factor > 2.0:
-            scale = 2.0
-        elif metrics.profit_factor > 1.5:
-            # PF 1.5→1.2x, PF 2.0→2.0x
-            pf_excess = (metrics.profit_factor - 1.5) / 0.5
-            scale = 1.2 + 0.8 * pf_excess
+        # Profit factor scaling — moderate upscaling for winners
+        if metrics.profit_factor > 1.5:
+            scale = 1.2
         elif metrics.profit_factor > 1.0:
             # PF 1.0→1.0x, PF 1.5→1.2x
             pf_excess = (metrics.profit_factor - 1.0) / 0.5
@@ -142,18 +138,18 @@ class AdaptiveController:
         if metrics.current_streak <= -4:
             scale *= 0.5
 
-        # Winning streak bonus: 4+ consecutive wins → boost 25%
+        # Winning streak bonus: 4+ consecutive wins → boost 10%
         if metrics.current_streak >= 4:
-            scale *= 1.25
+            scale *= 1.10
 
-        # Strong positive trend → boost
+        # Strong positive trend → modest boost
         if metrics.recent_trend > 0.6:
-            scale *= 1.2
+            scale *= 1.10
         # Strong negative trend → reduce
         elif metrics.recent_trend < -0.6:
             scale *= 0.7
 
-        return max(0.15, min(2.0, scale))
+        return max(0.15, min(1.2, scale))
 
     def _compute_leverage_scale(self, overall: StrategyMetrics) -> float:
         """
