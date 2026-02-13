@@ -9,6 +9,7 @@ BOT_DIR = os.path.dirname(os.path.abspath(__file__))
 LOG_FILE = os.path.join(BOT_DIR, "watchdog.log")
 PID_FILE = os.path.join(BOT_DIR, "data", "bot.pid")
 STOP_FILE = os.path.join(BOT_DIR, "data", "bot.stop")
+DASHBOARD_PORT = 5000
 RESTART_DELAY_SECONDS = 10
 MAX_RAPID_RESTARTS = 5       # if it crashes this many times in RAPID_WINDOW, back off
 RAPID_WINDOW_SECONDS = 60
@@ -34,6 +35,33 @@ def _check_stop_signal() -> bool:
     return False
 
 
+def _start_dashboard() -> subprocess.Popen | None:
+    """Launch the Flask dashboard as a background subprocess."""
+    try:
+        proc = subprocess.Popen(
+            [sys.executable, os.path.join("dashboard", "app.py")],
+            cwd=BOT_DIR,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+        log(f"Dashboard started on port {DASHBOARD_PORT} (PID {proc.pid})")
+        return proc
+    except Exception as e:
+        log(f"Failed to start dashboard: {e}")
+        return None
+
+
+def _stop_dashboard(proc: subprocess.Popen | None):
+    """Terminate the dashboard subprocess."""
+    if proc and proc.poll() is None:
+        proc.terminate()
+        try:
+            proc.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+        log("Dashboard stopped.")
+
+
 def main():
     log("Watchdog starting — will keep CryptoTrader alive 24/7")
 
@@ -42,6 +70,9 @@ def main():
     with open(PID_FILE, "w") as f:
         f.write(str(os.getpid()))
     log(f"PID file written: {os.getpid()}")
+
+    # Start dashboard
+    dashboard_proc = _start_dashboard()
 
     recent_crashes: list[float] = []
 
@@ -91,6 +122,7 @@ def main():
             time.sleep(RESTART_DELAY_SECONDS)
 
     finally:
+        _stop_dashboard(dashboard_proc)
         # Clean up PID file
         try:
             os.remove(PID_FILE)
