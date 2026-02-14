@@ -83,6 +83,10 @@ class StrategyManager:
                 reason=signal.reason + f"; trending_weak penalty (-{penalty:.2f})",
             )
 
+        # Apply choppy market filter (high ATR without strong direction)
+        if signal.signal != Signal.HOLD and signal.strategy == "momentum":
+            signal = self._apply_choppy_filter(signal, df)
+
         # Apply multi-timeframe filter
         if signal.signal != Signal.HOLD and higher_tf_data:
             signal = self._apply_mtf_filter(signal, higher_tf_data)
@@ -186,6 +190,43 @@ class StrategyManager:
             return MarketRegime.RANGING
 
         return regime
+
+    def _apply_choppy_filter(self, signal: TradeSignal, df: pd.DataFrame) -> TradeSignal:
+        """Penalize momentum signals when volatility is high but trend is weak (whipsaw)."""
+        if not getattr(settings, "CHOPPY_FILTER_ENABLED", False):
+            return signal
+
+        if len(df) < settings.VOLUME_SMA_PERIOD + 5:
+            return signal
+
+        latest = df.iloc[-1]
+        atr = latest.get("atr", 0)
+        atr_sma = df["atr"].rolling(settings.VOLUME_SMA_PERIOD).mean().iloc[-1]
+        adx_col = f"ADX_{settings.ADX_PERIOD}"
+        adx = latest.get(adx_col, 0)
+
+        if atr_sma <= 0:
+            return signal
+
+        atr_ratio = atr / atr_sma
+        atr_threshold = getattr(settings, "CHOPPY_ATR_RATIO_THRESHOLD", 1.15)
+        adx_ceiling = getattr(settings, "CHOPPY_ADX_CEILING", 30)
+        penalty = getattr(settings, "CHOPPY_CONFIDENCE_PENALTY", 0.12)
+
+        if atr_ratio > atr_threshold and adx < adx_ceiling:
+            new_conf = max(0.0, signal.confidence - penalty)
+            logger.info(
+                f"CHOPPY FILTER: -{penalty:.2f} confidence "
+                f"(ATR ratio={atr_ratio:.2f}, ADX={adx:.1f})"
+            )
+            return TradeSignal(
+                signal=signal.signal, confidence=new_conf, strategy=signal.strategy,
+                symbol=signal.symbol, entry_price=signal.entry_price,
+                stop_loss=signal.stop_loss, take_profit=signal.take_profit,
+                reason=signal.reason + f"; choppy penalty (-{penalty:.2f})",
+            )
+
+        return signal
 
     def _apply_mtf_filter(
         self, signal: TradeSignal, higher_tf_data: dict[str, pd.DataFrame]

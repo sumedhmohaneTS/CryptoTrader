@@ -48,6 +48,12 @@ STRATEGY_REWARD_RISK_RATIO = {
     "breakout": 2.0,
 }
 MIN_SL_DISTANCE_PCT = 0.015      # Reject signals with SL < 1.5% from entry (noise floor at 25x)
+
+# Choppy market filter — penalize momentum when ATR is elevated without strong direction
+CHOPPY_FILTER_ENABLED = True
+CHOPPY_ATR_RATIO_THRESHOLD = 1.15   # ATR/ATR_SMA > 1.15 = elevated volatility
+CHOPPY_ADX_CEILING = 30             # Only apply when ADX < 30 (strong trends unaffected)
+CHOPPY_CONFIDENCE_PENALTY = 0.12    # Confidence penalty for momentum in choppy conditions
 DAILY_LOSS_LIMIT_PCT = 0.12      # Stop trading if down 12% in a day
 MAX_DRAWDOWN_PCT = 0.35          # Circuit breaker at 35% drawdown from peak
 MAX_OPEN_POSITIONS = 5           # Allow 5 concurrent positions
