@@ -69,8 +69,8 @@ class AdaptiveController:
     def _compute_confidence(self, strategy: str, metrics: StrategyMetrics, has_data: bool) -> float:
         """
         Adjust confidence threshold based on win rate and profit factor.
-        Good performance → lower threshold (more trades).
-        Bad performance → raise threshold (fewer trades).
+        Good performance -> lower threshold (more trades).
+        Bad performance -> raise threshold (fewer trades).
         Range: base - 0.10 to base + 0.08
         """
         base = _DEFAULT_CONFIDENCE.get(strategy, settings.MIN_SIGNAL_CONFIDENCE)
@@ -80,7 +80,7 @@ class AdaptiveController:
 
         adjustment = 0.0
 
-        # Win rate adjustment: WR > 50% → lower; WR < 40% → raise
+        # Win rate adjustment: WR > 50% -> lower; WR < 40% -> raise
         if metrics.win_rate > 0.50:
             # Scale down by up to 0.10 as WR approaches 65%
             wr_excess = min(metrics.win_rate - 0.50, 0.15) / 0.15
@@ -90,15 +90,15 @@ class AdaptiveController:
             wr_deficit = min(0.40 - metrics.win_rate, 0.15) / 0.15
             adjustment += 0.05 * wr_deficit
 
-        # Profit factor bonus: PF > 1.5 → slight loosening
+        # Profit factor bonus: PF > 1.5 -> slight loosening
         if metrics.profit_factor > 1.5:
             adjustment -= 0.03
 
-        # Profit factor penalty: PF < 0.7 → tightening
+        # Profit factor penalty: PF < 0.7 -> tightening
         if metrics.profit_factor < 0.7:
             adjustment += 0.03
 
-        # Trend bonus: strong positive trend → loosening
+        # Trend bonus: strong positive trend -> loosening
         if metrics.recent_trend > 0.5:
             adjustment -= 0.03
 
@@ -124,28 +124,28 @@ class AdaptiveController:
         if metrics.profit_factor > 1.5:
             scale = 1.2
         elif metrics.profit_factor > 1.0:
-            # PF 1.0→1.0x, PF 1.5→1.2x
+            # PF 1.0->1.0x, PF 1.5->1.2x
             pf_excess = (metrics.profit_factor - 1.0) / 0.5
             scale = 1.0 + 0.2 * pf_excess
         elif metrics.profit_factor > 0.5:
-            # PF 0.5→0.3x, PF 1.0→1.0x
+            # PF 0.5->0.3x, PF 1.0->1.0x
             pf_pos = (metrics.profit_factor - 0.5) / 0.5
             scale = 0.3 + 0.7 * pf_pos
         else:
             scale = 0.25
 
-        # Losing streak penalty: 4+ consecutive losses → halve
+        # Losing streak penalty: 4+ consecutive losses -> halve
         if metrics.current_streak <= -4:
             scale *= 0.5
 
-        # Winning streak bonus: 4+ consecutive wins → boost 10%
+        # Winning streak bonus: 4+ consecutive wins -> boost 10%
         if metrics.current_streak >= 4:
             scale *= 1.10
 
-        # Strong positive trend → modest boost
+        # Strong positive trend -> modest boost
         if metrics.recent_trend > 0.6:
             scale *= 1.10
-        # Strong negative trend → reduce
+        # Strong negative trend -> reduce
         elif metrics.recent_trend < -0.6:
             scale *= 0.7
 
@@ -167,12 +167,12 @@ class AdaptiveController:
         if overall.profit_factor > 1.2:
             scale = 1.0
         elif overall.profit_factor > 0.8:
-            # Linear: PF 0.8→0.7x, PF 1.2→1.0x
+            # Linear: PF 0.8->0.7x, PF 1.2->1.0x
             scale = 0.7 + 0.3 * (overall.profit_factor - 0.8) / 0.4
         else:
             scale = 0.7
 
-        # Losing streak override: 6+ overall losing streak → 0.6x
+        # Losing streak override: 6+ overall losing streak -> 0.6x
         if overall.current_streak <= -6:
             scale = min(scale, 0.6)
 
@@ -181,7 +181,7 @@ class AdaptiveController:
     def _compute_sl_multiplier(self, strategy: str, metrics: StrategyMetrics, has_data: bool) -> float:
         """
         Adjust SL ATR multiplier per strategy based on win rate.
-        High WR → tighter stops. Low WR → wider stops.
+        High WR -> tighter stops. Low WR -> wider stops.
         Bounds relative to strategy base: floor=max(0.6, base*0.75), ceiling=min(2.5, base*1.5).
         """
         base = getattr(settings, "STRATEGY_SL_ATR_MULTIPLIER", {}).get(
@@ -191,11 +191,11 @@ class AdaptiveController:
         if not has_data:
             return base
 
-        # WR > 50% → tighten stops
+        # WR > 50% -> tighten stops
         if metrics.win_rate > 0.50:
             wr_excess = min(metrics.win_rate - 0.50, 0.15) / 0.15
             result = base - (base * 0.10) * wr_excess
-        # WR < 35% → widen stops
+        # WR < 35% -> widen stops
         elif metrics.win_rate < 0.35:
             wr_deficit = min(0.35 - metrics.win_rate, 0.15) / 0.15
             result = base + (base * 0.15) * wr_deficit

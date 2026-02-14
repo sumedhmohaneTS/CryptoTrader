@@ -53,7 +53,7 @@ class MarketAnalyzer:
 
         # Check for trending regime
         if adx > settings.ADX_TRENDING_THRESHOLD:
-            # Trend exhaustion check: OI dropping sharply → downgrade to RANGING
+            # Trend exhaustion check: OI dropping sharply -> downgrade to RANGING
             if derivatives_data:
                 oi_delta = derivatives_data.get("oi_delta_pct", 0.0)
                 exhaustion_threshold = getattr(settings, "TREND_EXHAUSTION_OI_DELTA", -3.0)

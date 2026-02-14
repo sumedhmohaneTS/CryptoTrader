@@ -182,7 +182,7 @@ MAX_ENTRIES_PER_TICK = 2                   # Max 2 new positions opened on same 
 MOMENTUM_DECAY_EXIT = False                # Disabled — cuts winners too short in IS backtest (enable after live validation)
 TRAIL_VOL_SCALE = {
     "volatile": 1.0,       # All 1.0 — tuning needs live derivatives data (volatile=1.4 helped IS but killed OOS)
-    "trending": 1.0,       # MUST stay 1.0 — tighter (0.9) killed momentum PnL (+34% → +3%)
+    "trending": 1.0,       # MUST stay 1.0 — tighter (0.9) killed momentum PnL (+34% -> +3%)
     "trending_strong": 1.0,  # Same as trending
     "trending_weak": 1.0,   # Same as trending
     "ranging": 1.0,        # Default

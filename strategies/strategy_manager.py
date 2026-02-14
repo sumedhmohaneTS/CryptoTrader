@@ -53,7 +53,7 @@ class StrategyManager:
             if prev_regime is not None and prev_regime != regime.value:
                 self._regime_change_bar[symbol] = bar_index
                 logger.info(
-                    f"REGIME CHANGE {symbol}: {prev_regime} → {regime.value}, "
+                    f"REGIME CHANGE {symbol}: {prev_regime} -> {regime.value}, "
                     f"waiting {wait_bars} bars"
                 )
             self._last_regime[symbol] = regime.value
@@ -75,7 +75,7 @@ class StrategyManager:
         if regime == MarketRegime.TRENDING_WEAK and signal.signal != Signal.HOLD:
             penalty = getattr(settings, "TRENDING_WEAK_CONFIDENCE_PENALTY", 0.08)
             new_conf = max(0.0, signal.confidence - penalty)
-            logger.info(f"TRENDING_WEAK penalty: -{penalty:.2f} confidence ({signal.confidence:.2f}→{new_conf:.2f})")
+            logger.info(f"TRENDING_WEAK penalty: -{penalty:.2f} confidence ({signal.confidence:.2f}->{new_conf:.2f})")
             signal = TradeSignal(
                 signal=signal.signal, confidence=new_conf, strategy=signal.strategy,
                 symbol=signal.symbol, entry_price=signal.entry_price,
@@ -122,10 +122,10 @@ class StrategyManager:
         """Downgrade TRENDING to RANGING if higher TF is not trending.
 
         When ENABLE_TRENDING_WEAK is True, uses graduated 3-tier gating:
-          - 4h ADX >= MTF_STRONG_ADX_THRESHOLD → TRENDING_STRONG (full momentum)
-          - 4h ADX >= MTF_WEAK_ADX_THRESHOLD   → TRENDING_WEAK (momentum with confidence penalty)
-          - 4h ADX <  MTF_WEAK_ADX_THRESHOLD   → RANGING (after hysteresis confirmation)
-        When False, uses original binary gate (ADX < 22 → RANGING).
+          - 4h ADX >= MTF_STRONG_ADX_THRESHOLD -> TRENDING_STRONG (full momentum)
+          - 4h ADX >= MTF_WEAK_ADX_THRESHOLD   -> TRENDING_WEAK (momentum with confidence penalty)
+          - 4h ADX <  MTF_WEAK_ADX_THRESHOLD   -> RANGING (after hysteresis confirmation)
+        When False, uses original binary gate (ADX < 22 -> RANGING).
         """
         confirm_tf = getattr(settings, "MTF_REGIME_TF", "4h")
         htf_df = higher_tf_data.get(confirm_tf)
@@ -149,7 +149,7 @@ class StrategyManager:
             if htf_adx >= strong_threshold:
                 self._htf_rejection_count[symbol] = 0
                 logger.info(
-                    f"MTF REGIME: TRENDING→TRENDING_STRONG "
+                    f"MTF REGIME: TRENDING->TRENDING_STRONG "
                     f"({confirm_tf} ADX={htf_adx:.1f} >= {strong_threshold})"
                 )
                 return MarketRegime.TRENDING_STRONG
@@ -157,7 +157,7 @@ class StrategyManager:
             elif htf_adx >= weak_threshold:
                 self._htf_rejection_count[symbol] = 0
                 logger.info(
-                    f"MTF REGIME: TRENDING→TRENDING_WEAK "
+                    f"MTF REGIME: TRENDING->TRENDING_WEAK "
                     f"({confirm_tf} ADX={htf_adx:.1f}, {weak_threshold}-{strong_threshold})"
                 )
                 return MarketRegime.TRENDING_WEAK
@@ -168,14 +168,14 @@ class StrategyManager:
                 self._htf_rejection_count[symbol] = count
                 if count >= confirmations_needed:
                     logger.info(
-                        f"MTF REGIME: TRENDING→RANGING "
+                        f"MTF REGIME: TRENDING->RANGING "
                         f"({confirm_tf} ADX={htf_adx:.1f} < {weak_threshold}, "
                         f"{count}/{confirmations_needed} confirmations)"
                     )
                     return MarketRegime.RANGING
                 else:
                     logger.info(
-                        f"MTF REGIME: TRENDING→TRENDING_WEAK (hysteresis "
+                        f"MTF REGIME: TRENDING->TRENDING_WEAK (hysteresis "
                         f"{count}/{confirmations_needed}, {confirm_tf} ADX={htf_adx:.1f})"
                     )
                     return MarketRegime.TRENDING_WEAK
@@ -184,7 +184,7 @@ class StrategyManager:
         threshold = getattr(settings, "MTF_REGIME_ADX_THRESHOLD", 22)
         if htf_adx < threshold:
             logger.info(
-                f"MTF REGIME: Downgraded TRENDING→RANGING "
+                f"MTF REGIME: Downgraded TRENDING->RANGING "
                 f"({confirm_tf} ADX={htf_adx:.1f} < {threshold})"
             )
             return MarketRegime.RANGING
@@ -402,7 +402,7 @@ class StrategyManager:
         is_cascade = deriv.get("is_cascade", False)
         squeeze = deriv.get("squeeze_risk", 0.0)
 
-        # Liquidation cascade → HOLD (wait for dust to settle)
+        # Liquidation cascade -> HOLD (wait for dust to settle)
         if is_cascade:
             logger.info(f"DERIVATIVES FILTER: Liquidation cascade detected — blocking signal")
             return TradeSignal(
@@ -412,19 +412,19 @@ class StrategyManager:
                 reason="Blocked: liquidation cascade",
             )
 
-        # OI falling + breakout signal → reduce confidence (no money behind move)
+        # OI falling + breakout signal -> reduce confidence (no money behind move)
         if oi_delta < -2.0 and signal.strategy == "breakout":
             adjustment -= 0.15
             reason += f"; OI falling ({oi_delta:+.1f}%), weak breakout"
 
-        # OI rising + direction aligned → boost confidence (real commitment)
+        # OI rising + direction aligned -> boost confidence (real commitment)
         elif oi_delta > 2.0:
             if (signal.signal == Signal.BUY and oi_direction == "bullish") or \
                (signal.signal == Signal.SELL and oi_direction == "bearish"):
                 adjustment += 0.10
                 reason += f"; OI rising ({oi_delta:+.1f}%), conviction"
 
-        # Crowded funding → reduce confidence
+        # Crowded funding -> reduce confidence
         funding_threshold = getattr(settings, "FUNDING_ZSCORE_THRESHOLD", 2.0)
         if abs(funding_z) > funding_threshold:
             if (signal.signal == Signal.BUY and funding_z > 0) or \

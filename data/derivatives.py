@@ -20,7 +20,7 @@ class DerivativesService:
         self._ttl = getattr(settings, "DERIVATIVES_CACHE_TTL", 300)
 
     def _to_bare_symbol(self, symbol: str) -> str:
-        """Convert 'BTC/USDT' → 'BTCUSDT' for Binance API."""
+        """Convert 'BTC/USDT' -> 'BTCUSDT' for Binance API."""
         return symbol.replace("/", "").replace(":USDT", "")
 
     def _is_cached(self, key: str) -> bool:
@@ -171,14 +171,14 @@ class DerivativesService:
 
         risk = min(1.0, risk)
 
-        # Direction hint: if OI rising and funding positive → longs dominant → squeeze down
+        # Direction hint: if OI rising and funding positive -> longs dominant -> squeeze down
         direction = "neutral"
         funding_z = self.compute_funding_zscore(symbol)
         if oi_buildup:
             if funding_z > 1.0:
-                direction = "bearish"  # Longs crowded → squeeze down
+                direction = "bearish"  # Longs crowded -> squeeze down
             elif funding_z < -1.0:
-                direction = "bullish"  # Shorts crowded → squeeze up
+                direction = "bullish"  # Shorts crowded -> squeeze up
 
         result = {
             "squeeze_risk": round(risk, 2),

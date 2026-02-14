@@ -415,7 +415,7 @@ class BacktestEngine:
                     position.stop_loss = new_stop
 
     def _check_momentum_decay(self, position: Position, candle: pd.Series, symbol: str, timestamp) -> bool:
-        """Check if momentum is decaying while position is in profit → early exit."""
+        """Check if momentum is decaying while position is in profit -> early exit."""
         current_price = candle["close"]
         pnl = position.unrealized_pnl(current_price)
         if pnl <= 0:

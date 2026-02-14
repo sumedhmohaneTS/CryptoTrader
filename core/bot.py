@@ -610,7 +610,7 @@ class TradingBot:
                         position.lowest_price = min(position.lowest_price, current_price)
                     logger.info(
                         f"HYBRID TRAIL {position.symbol}: TP hit, trailing activated "
-                        f"(SL → ${position.stop_loss:.4f})"
+                        f"(SL -> ${position.stop_loss:.4f})"
                     )
                 elif not trailing_enabled or not hybrid:
                     close_reason = "take_profit"
@@ -657,7 +657,7 @@ class TradingBot:
                 position.stop_loss = max(position.stop_loss, position.entry_price)
                 logger.info(
                     f"TRAILING {position.symbol}: breakeven activated "
-                    f"(SL ${old_sl:.4f} → ${position.stop_loss:.4f})"
+                    f"(SL ${old_sl:.4f} -> ${position.stop_loss:.4f})"
                 )
 
             # Trail the stop
@@ -668,7 +668,7 @@ class TradingBot:
                     position.stop_loss = new_stop
                     logger.info(
                         f"TRAILING {position.symbol}: SL raised "
-                        f"${old_sl:.4f} → ${position.stop_loss:.4f} "
+                        f"${old_sl:.4f} -> ${position.stop_loss:.4f} "
                         f"(high: ${position.highest_price:.4f})"
                     )
         else:
@@ -684,7 +684,7 @@ class TradingBot:
                 position.stop_loss = min(position.stop_loss, position.entry_price)
                 logger.info(
                     f"TRAILING {position.symbol}: breakeven activated "
-                    f"(SL ${old_sl:.4f} → ${position.stop_loss:.4f})"
+                    f"(SL ${old_sl:.4f} -> ${position.stop_loss:.4f})"
                 )
 
             # Trail the stop
@@ -695,12 +695,12 @@ class TradingBot:
                     position.stop_loss = new_stop
                     logger.info(
                         f"TRAILING {position.symbol}: SL lowered "
-                        f"${old_sl:.4f} → ${position.stop_loss:.4f} "
+                        f"${old_sl:.4f} -> ${position.stop_loss:.4f} "
                         f"(low: ${position.lowest_price:.4f})"
                     )
 
     def _check_momentum_decay(self, position: Position, current_price: float) -> bool:
-        """Check if momentum is decaying while position is in profit → early exit."""
+        """Check if momentum is decaying while position is in profit -> early exit."""
         pnl = position.unrealized_pnl(current_price)
         if pnl <= 0:
             return False  # Only exit winners early
