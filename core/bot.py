@@ -500,6 +500,16 @@ class TradingBot:
                 if signal.stop_loss <= 0:
                     return
 
+                # Minimum SL distance — reject if stop is within noise floor
+                min_sl_pct = getattr(settings, "MIN_SL_DISTANCE_PCT", 0.015)
+                sl_distance_pct = abs(signal.entry_price - signal.stop_loss) / signal.entry_price
+                if sl_distance_pct < min_sl_pct:
+                    logger.info(
+                        f"SL too tight: {sl_distance_pct:.3%} < {min_sl_pct:.1%} min "
+                        f"({signal.symbol} {signal.strategy})"
+                    )
+                    return
+
                 risk = abs(signal.entry_price - signal.stop_loss)
                 reward = abs(signal.take_profit - signal.entry_price)
                 strat_rr = overrides.rr_ratio.get(signal.strategy, settings.REWARD_RISK_RATIO)
