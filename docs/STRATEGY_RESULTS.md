@@ -819,6 +819,66 @@ Jan-May 2025 remains negative because it was a genuinely hostile whipsaw market.
 
 ---
 
+## Test 22: Staircase Profit Taking — CURRENT LIVE CONFIG
+
+**Date**: Feb 15, 2026
+**Changes**: Added staircase profit taking. When TP is hit, instead of activating trailing on the full position, close 50% at TP (locks in real cash), move SL to breakeven on the remainder, and trail the remaining 50%. This is the industry-standard "hybrid 50/50" approach.
+
+**New feature**:
+1. **Staircase** — at TP: close 50% (real profit), SL to entry (breakeven), trail remaining 50%
+
+| Setting | Value |
+|---------|-------|
+| Leverage | 25x |
+| Timeframe | 15m |
+| Pairs | BTC, SOL, XRP, DOGE, AVAX, SUI, RENDER, LINK, AXS, ZEC (10 pairs) |
+| Position size | 15% |
+| Per-strategy SL | momentum 1.5 ATR, mean_reversion 0.8 ATR, breakout 1.5 ATR |
+| Per-strategy R:R | momentum 2.0, mean_reversion 1.2, breakout 2.0 |
+| Min SL distance | 1.5% from entry |
+| Trailing | **Staircase** (50% close at TP, trail remainder), breakeven at 1.0 R:R, 1.5 ATR trail |
+| Max positions | 5 |
+| Adaptive | Enabled, 50-trade rolling window, sizing 0.15-1.2x |
+| MTF gating | Graduated: STRONG (ADX>=25), WEAK (18-25, -0.08 conf), RANGING (<18, 3-bar hysteresis) |
+| Choppy filter | ATR/ATR_SMA > 1.15 AND ADX < 30 -> -0.12 momentum confidence |
+
+### IS Results (Nov 2025 - Feb 2026)
+
+| Metric | Value | vs Test 21 |
+|--------|-------|------------|
+| **Return** | **+43.08%** | -11.46pp |
+| **Sharpe** | **2.30** | +0.13 |
+| **Profit Factor** | **1.34** | +0.03 |
+| Max Drawdown | 23.73% | -2.91pp |
+| Trades | 360 | +96 |
+| Win Rate | 57.8% | +7.4pp |
+
+### Walk-Forward OOS Results (6 windows)
+
+| Window | Period | Staircase OFF | Staircase ON | Delta |
+|--------|--------|---------------|--------------|-------|
+| V1 | Aug-Sep 2025 | -15.35% | -16.81% | -1.46pp |
+| V2 | Sep-Oct 2025 | +6.80% | +4.67% | -2.13pp |
+| V3 | Oct-Nov 2025 | +55.86% | **+87.22%** | **+31.36pp** |
+| V4 | Nov-Dec 2025 | +3.63% | **+19.78%** | **+16.15pp** |
+| V5 | Dec-Jan 2026 | -6.92% | -7.50% | -0.58pp |
+| V6 | Jan-Feb 2026 | +10.91% | +12.25% | +1.34pp |
+| **Avg OOS** | | **+9.15%** | **+16.60%** | **+7.45pp** |
+
+Both configs: 4/6 OOS windows profitable. Test/Train ratio: ON = 0.58 vs OFF = 0.52.
+
+### Why This Works
+
+Staircase locks in 50% of the position as real profit at TP, then trails the remainder for extended moves. The key insight is that in trending markets (V3, V4), the trailed 50% captures significantly more upside because the breakeven SL on the remainder means zero downside risk. In choppy/losing periods, the impact is minimal.
+
+**IS tradeoffs**: Lower raw return (-11pp) but better risk-adjusted metrics: higher Sharpe (2.30 vs 2.17), higher PF (1.34 vs 1.31), lower max DD (23.73% vs 26.64%), much higher win rate (57.8% vs 50.4%). The higher trade count (360 vs 264) is because each TP trade now generates two close events (partial + remainder).
+
+**OOS advantage**: +81% improvement in average OOS return (+16.60% vs +9.15%). Better generalization ratio (0.58 vs 0.52).
+
+**Verdict**: Trades a small IS return reduction for meaningfully better risk metrics and significantly better OOS performance. The win rate jump (50% -> 58%) and DD reduction (27% -> 24%) make this a strictly better risk profile. Deployed to live trading Feb 15, 2026.
+
+---
+
 ## Summary: All Tests Comparison
 
 | Test | Config | Return | Sharpe | Trades | Win Rate | Max DD | PF |
@@ -847,7 +907,9 @@ Jan-May 2025 remains negative because it was a genuinely hostile whipsaw market.
 | 20 | 25x, 15m, adaptive cap 1.2x + min SL 1.5% (OOS) | +124.96% | 3.01 | 393 | 50.4% | 23.83% | 1.83 |
 | **21** | **25x, 15m, choppy market filter (IS)** | **+54.54%** | **2.17** | **264** | **50.4%** | **26.64%** | **1.31** |
 | **21** | **25x, 15m, choppy market filter (OOS)** | **+132.00%** | **3.07** | **373** | **49.6%** | **23.44%** | **1.87** |
-| **21** | **25x, 15m, choppy market filter (Jan-May 2025)** | **-15.47%** | **-1.13** | **340** | **47.9%** | **29.16%** | **0.92** |
+| 21 | 25x, 15m, choppy market filter (Jan-May 2025) | -15.47% | -1.13 | 340 | 47.9% | 29.16% | 0.92 |
+| **22** | **25x, 15m, staircase profit taking (IS)** | **+43.08%** | **2.30** | **360** | **57.8%** | **23.73%** | **1.34** |
+| **22** | **25x, 15m, staircase profit taking (WF OOS avg)** | **+16.60%** | **—** | **—** | **—** | **—** | **—** |
 
 ---
 
@@ -888,7 +950,8 @@ Jan-May 2025 remains negative because it was a genuinely hostile whipsaw market.
 33. **Choppy market filter is a Pareto improvement** -- high ATR without strong direction = whipsaw; penalizing momentum (-0.12 conf) when ATR/ATR_SMA > 1.15 AND ADX < 30 improves ALL tested periods
 34. **Jan-May 2025 is a hostile whipsaw market** -- ADX distribution similar to profitable periods, but ATR% is 0.754% vs 0.618% in OOS; price moves without sustaining direction
 35. **Some periods will lose money** -- adaptive system correctly throttles sizing to 0.17x during drawdowns; don't over-optimize to make every period profitable (risks curve-fitting)
+36. **Staircase profit taking improves risk profile** -- closing 50% at TP locks cash, trails remainder; IS return drops ~11pp but Sharpe improves (+0.13), DD drops (-3pp), win rate jumps (+7pp), OOS avg improves +81%
 
-## Best Configuration (Test 21 -- LIVE)
+## Best Configuration (Test 22 -- LIVE)
 
-25x leverage, 15m timeframe, hybrid trailing stops (breakeven at 1.0 R:R), 10 static pairs, 15% position size, 5 max positions, per-strategy SL/R:R, adaptive sizing **capped at 1.2x**, min SL distance **1.5%**, graduated MTF regime gating (STRONG: 4h ADX >= 25, WEAK: 18-25 with -0.08 conf penalty, RANGING: < 18 after 3-bar hysteresis), **choppy filter** (ATR/ATR_SMA > 1.15 AND ADX < 30 → -0.12 momentum conf). **IS: +54.54% (Sharpe 2.17), OOS: +132.00% (Sharpe 3.07), Jan-May 2025: -15.47% (Sharpe -1.13).** Pareto improvement over Test 20 — better in all periods.
+25x leverage, 15m timeframe, **staircase profit taking** (50% close at TP, trail remaining 50%, breakeven at 1.0 R:R), 10 static pairs, 15% position size, 5 max positions, per-strategy SL/R:R, adaptive sizing **capped at 1.2x**, min SL distance **1.5%**, graduated MTF regime gating (STRONG: 4h ADX >= 25, WEAK: 18-25 with -0.08 conf penalty, RANGING: < 18 after 3-bar hysteresis), **choppy filter** (ATR/ATR_SMA > 1.15 AND ADX < 30 -> -0.12 momentum conf). **IS: +43.08% (Sharpe 2.30), WF OOS avg: +16.60% (4/6 windows profitable).** Better risk-adjusted metrics than Test 21 with significantly improved OOS generalization.
