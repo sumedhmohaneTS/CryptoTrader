@@ -29,6 +29,10 @@ class Position:
     partial_closed: bool = False        # True after partial close at TP (guard against double-execution)
     original_quantity: float = 0.0      # Track initial size for logging
 
+    # Exchange-side stop order tracking
+    exchange_stop_order_id: str = ""    # Binance order ID for active STOP_MARKET
+    exchange_stop_price: float = 0.0    # Price the exchange stop is set at
+
     def __post_init__(self):
         # Auto-compute initial_risk if not provided
         if self.initial_risk == 0.0 and self.stop_loss > 0:

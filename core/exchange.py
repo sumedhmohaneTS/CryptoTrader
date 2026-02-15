@@ -308,6 +308,160 @@ class Exchange:
             logger.error(f"Failed to cancel order {order_id}: {e}")
             return False
 
+    # ------------------------------------------------------------------
+    # Exchange-side stop-loss orders (STOP_MARKET)
+    # ------------------------------------------------------------------
+
+    def place_stop_order(
+        self, symbol: str, side: str, quantity: float, stop_price: float
+    ) -> dict | None:
+        """Place a STOP_MARKET order on Binance as exchange-side SL.
+
+        Args:
+            symbol: Trading pair (e.g. "BTC/USDT")
+            side: Position side ("buy" for long, "sell" for short)
+                  The stop order uses the OPPOSITE side to close.
+            quantity: Position size to protect
+            stop_price: Price at which the stop triggers
+
+        Returns:
+            Order dict with 'id' field, or None on failure/paper mode.
+        """
+        if self.mode != "live" or not self._exchange:
+            return None
+
+        if not getattr(settings, "EXCHANGE_STOP_ORDERS_ENABLED", False):
+            return None
+
+        # Stop order side is opposite of position side
+        stop_side = "sell" if side == "buy" else "buy"
+        client_order_id = f"sl_{uuid.uuid4().hex[:16]}"
+        max_retries = getattr(settings, "EXCHANGE_STOP_MAX_RETRIES", 2)
+
+        last_error = None
+        for attempt in range(max_retries):
+            try:
+                order = self._exchange.create_order(
+                    symbol=symbol,
+                    type="STOP_MARKET",
+                    side=stop_side,
+                    amount=quantity,
+                    price=None,
+                    params={
+                        "stopPrice": stop_price,
+                        "positionSide": "BOTH",
+                        "reduceOnly": True,
+                        "newClientOrderId": client_order_id,
+                    },
+                )
+                logger.info(
+                    f"STOP_MARKET placed: {stop_side} {quantity:.6f} {symbol} "
+                    f"@ stop=${stop_price:.4f} (order={order['id']})"
+                )
+                return order
+            except ccxt.NetworkError as e:
+                last_error = e
+                delay = getattr(settings, "ORDER_RETRY_DELAY", 1.0) * (2 ** attempt)
+                logger.warning(
+                    f"Stop order network error (attempt {attempt + 1}/{max_retries}): {e} "
+                    f"-- retrying in {delay:.1f}s"
+                )
+                time.sleep(delay)
+            except ccxt.ExchangeError as e:
+                logger.error(f"Stop order exchange error (not retrying): {e}")
+                return None
+
+        logger.error(f"Failed to place stop order for {symbol} after {max_retries} retries: {last_error}")
+        return None
+
+    def cancel_stop_order(self, order_id: str, symbol: str) -> str:
+        """Cancel an exchange stop order, handling race conditions.
+
+        Returns:
+            "cancelled" - stop was successfully cancelled
+            "filled"    - stop was already triggered by exchange (race condition)
+            "error"     - cancellation failed for unknown reason
+        """
+        if self.mode != "live" or not self._exchange:
+            return "cancelled"
+
+        try:
+            self._exchange.cancel_order(order_id, symbol)
+            logger.info(f"Stop order cancelled: {order_id} for {symbol}")
+            return "cancelled"
+        except ccxt.OrderNotFound:
+            # Order not found — check if it was filled (exchange triggered the stop)
+            try:
+                order = self._exchange.fetch_order(order_id, symbol)
+                status = order.get("status", "unknown")
+                if status in ("closed", "filled"):
+                    logger.warning(
+                        f"Stop order {order_id} already FILLED by exchange for {symbol} "
+                        f"(exchange triggered the stop)"
+                    )
+                    return "filled"
+                elif status == "canceled":
+                    logger.info(f"Stop order {order_id} was already cancelled for {symbol}")
+                    return "cancelled"
+                else:
+                    logger.warning(f"Stop order {order_id} status={status} for {symbol}")
+                    return "cancelled"
+            except Exception as e:
+                logger.error(f"Failed to fetch stop order {order_id} status: {e}")
+                return "error"
+        except Exception as e:
+            logger.error(f"Failed to cancel stop order {order_id} for {symbol}: {e}")
+            return "error"
+
+    def update_stop_order(
+        self, old_order_id: str, symbol: str, side: str,
+        quantity: float, new_stop_price: float
+    ) -> dict | None:
+        """Cancel old stop and place new one (Binance doesn't support editing stops).
+
+        Returns:
+            New order dict on success, None on placement failure,
+            or {"_stop_already_filled": True} if the old stop was already triggered.
+        """
+        # Cancel old stop first
+        cancel_result = self.cancel_stop_order(old_order_id, symbol)
+
+        if cancel_result == "filled":
+            return {"_stop_already_filled": True}
+
+        if cancel_result == "error":
+            logger.warning(
+                f"Stop cancel returned error for {old_order_id} {symbol} — "
+                f"attempting new placement anyway"
+            )
+
+        # Place new stop
+        new_order = self.place_stop_order(symbol, side, quantity, new_stop_price)
+        if new_order is None and cancel_result == "cancelled":
+            logger.critical(
+                f"POSITION UNPROTECTED: cancelled stop {old_order_id} for {symbol} "
+                f"but failed to place new stop @ ${new_stop_price:.4f}. "
+                f"Software SL is still active as fallback."
+            )
+        return new_order
+
+    def get_open_stop_orders(self, symbol: str) -> list[dict]:
+        """Fetch open STOP_MARKET orders for a symbol (for startup recovery)."""
+        if self.mode != "live" or not self._exchange:
+            return []
+
+        try:
+            orders = self._exchange.fetch_open_orders(symbol)
+            stop_orders = [
+                o for o in orders
+                if o.get("type", "").upper() in ("STOP_MARKET", "STOP")
+                and o.get("status") == "open"
+            ]
+            return stop_orders
+        except Exception as e:
+            logger.error(f"Failed to fetch open stop orders for {symbol}: {e}")
+            return []
+
     def get_current_price(self, symbol: str) -> float:
         try:
             if self._exchange:

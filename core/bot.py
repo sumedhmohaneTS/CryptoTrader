@@ -139,6 +139,26 @@ class TradingBot:
                 confidence=0.0,
             )
             self.portfolio.add_position(position)
+
+            # Recover exchange stop orders
+            if getattr(settings, "EXCHANGE_STOP_ORDERS_ENABLED", False):
+                stop_orders = self.exchange.get_open_stop_orders(symbol)
+                if stop_orders:
+                    # Match by side: stop for a long is a sell stop, etc.
+                    expected_stop_side = "sell" if pos_data["side"] == "buy" else "buy"
+                    for so in stop_orders:
+                        if so.get("side", "").lower() == expected_stop_side:
+                            position.exchange_stop_order_id = str(so["id"])
+                            stop_px = float(so.get("stopPrice", so.get("price", 0)))
+                            position.exchange_stop_price = stop_px
+                            if stop_px > 0:
+                                position.stop_loss = stop_px
+                            logger.info(
+                                f"Recovered exchange stop for {symbol}: "
+                                f"order={so['id']} @ ${stop_px:.4f}"
+                            )
+                            break
+
             logger.info(
                 f"Recovered position: {pos_data['side']} {pos_data['contracts']:.6f} {symbol} "
                 f"@ ${pos_data['entry_price']:.4f} | uPnL: ${pos_data['unrealized_pnl']:.4f}"
@@ -218,6 +238,15 @@ class TradingBot:
             discrepancies = self.exchange.reconcile_positions(self.portfolio.positions)
             if discrepancies:
                 logger.warning(f"Position discrepancies found: {len(discrepancies)}")
+                for d in discrepancies:
+                    if d["type"] == "ghost":
+                        pos = self.portfolio.get_position(d["symbol"])
+                        if pos and pos.exchange_stop_order_id:
+                            logger.warning(
+                                f"Ghost position {d['symbol']} had exchange stop "
+                                f"-- likely exchange stop fired"
+                            )
+                            await self._handle_exchange_stop_fired(pos)
 
         # Snapshot portfolio
         await self.db.snapshot_portfolio(
@@ -561,6 +590,9 @@ class TradingBot:
                 self.portfolio.add_position(position)
                 self.risk_manager.record_trade_opened()
 
+                # Place exchange-side stop-loss order
+                self._place_exchange_stop(position)
+
         except Exception as e:
             logger.error(f"Error analyzing {symbol}: {e}", exc_info=True)
 
@@ -586,6 +618,9 @@ class TradingBot:
                 logger.info(
                     f"Set recovered SL/TP for {symbol}: SL=${position.stop_loss:.4f} TP=${position.take_profit:.4f}"
                 )
+                # Place exchange stop for recovered position if none exists
+                if not position.exchange_stop_order_id:
+                    self._place_exchange_stop(position)
 
             close_reason = ""
             hybrid = getattr(settings, "TRAILING_HYBRID", False)
@@ -616,6 +651,8 @@ class TradingBot:
                         f"HYBRID TRAIL {position.symbol}: TP hit, trailing activated "
                         f"(SL -> ${position.stop_loss:.4f})"
                     )
+                    # Force-sync exchange stop (large SL jump, skip throttle)
+                    self._sync_exchange_stop(position, force=True)
                 elif not trailing_enabled or not hybrid:
                     close_reason = "take_profit"
 
@@ -628,7 +665,11 @@ class TradingBot:
                 symbols_to_close.append((symbol, current_price, close_reason))
             elif trailing_enabled:
                 # Update trailing stop (only if not closing this tick)
+                old_sl = position.stop_loss
                 self._update_trailing_stop(position, current_price)
+                # Sync exchange stop if SL changed
+                if position.stop_loss != old_sl:
+                    self._sync_exchange_stop(position)
 
         for symbol, close_price, reason in symbols_to_close:
             if reason == "staircase_partial":
@@ -760,6 +801,20 @@ class TradingBot:
         close_pct = getattr(settings, "STAIRCASE_CLOSE_PCT", 0.50)
         qty_to_close = position.quantity * close_pct
 
+        # Cancel exchange stop before partial close
+        if position.exchange_stop_order_id:
+            cancel_result = self.exchange.cancel_stop_order(
+                position.exchange_stop_order_id, symbol
+            )
+            if cancel_result == "filled":
+                logger.info(
+                    f"STAIRCASE {symbol}: exchange stop already fired — aborting staircase"
+                )
+                await self._handle_exchange_stop_fired(position)
+                return
+            position.exchange_stop_order_id = ""
+            position.exchange_stop_price = 0.0
+
         # Close partial on exchange
         order = self.exchange.close_position(
             symbol=symbol,
@@ -843,10 +898,27 @@ class TradingBot:
                 f"Remaining: {remaining_qty:.6f} | SL -> breakeven ${position.entry_price:.4f}"
             )
 
+            # Place new exchange stop with reduced qty at breakeven
+            self._place_exchange_stop(position)
+
     async def _close_position(self, symbol: str, close_price: float, reason: str):
         position = self.portfolio.get_position(symbol)
         if not position:
             return
+
+        # Cancel exchange stop before closing
+        if position.exchange_stop_order_id:
+            cancel_result = self.exchange.cancel_stop_order(
+                position.exchange_stop_order_id, symbol
+            )
+            if cancel_result == "filled":
+                logger.info(
+                    f"CLOSE {symbol}: exchange stop already fired — skipping close_position"
+                )
+                await self._handle_exchange_stop_fired(position)
+                return
+            position.exchange_stop_order_id = ""
+            position.exchange_stop_price = 0.0
 
         # Close futures position
         order = self.exchange.close_position(
@@ -910,3 +982,157 @@ class TradingBot:
             logger.info(
                 f"CLOSED {symbol} ({reason}): {emoji}${pnl:.2f} ({pnl_pct:.1%})"
             )
+
+    # ------------------------------------------------------------------
+    # Exchange-side stop-loss helpers
+    # ------------------------------------------------------------------
+
+    def _place_exchange_stop(self, position: Position):
+        """Place a STOP_MARKET order for a position. Updates position tracking fields."""
+        if not getattr(settings, "EXCHANGE_STOP_ORDERS_ENABLED", False):
+            return
+        if self.mode != "live":
+            return
+        if position.stop_loss <= 0:
+            return
+
+        order = self.exchange.place_stop_order(
+            symbol=position.symbol,
+            side=position.side,
+            quantity=position.quantity,
+            stop_price=position.stop_loss,
+        )
+        if order:
+            position.exchange_stop_order_id = str(order["id"])
+            position.exchange_stop_price = position.stop_loss
+        else:
+            logger.error(
+                f"Failed to place exchange stop for {position.symbol} "
+                f"@ ${position.stop_loss:.4f} — software SL remains as fallback"
+            )
+
+    def _sync_exchange_stop(self, position: Position, force: bool = False):
+        """Sync exchange stop with current software SL (throttled by threshold)."""
+        if not getattr(settings, "EXCHANGE_STOP_ORDERS_ENABLED", False):
+            return
+        if self.mode != "live":
+            return
+        if not position.exchange_stop_order_id:
+            # No existing exchange stop — place a fresh one
+            self._place_exchange_stop(position)
+            return
+        if position.stop_loss <= 0:
+            return
+
+        # Throttle: only update if SL changed more than threshold
+        threshold = getattr(settings, "EXCHANGE_STOP_UPDATE_THRESHOLD", 0.001)
+        if not force and position.exchange_stop_price > 0:
+            change_pct = abs(position.stop_loss - position.exchange_stop_price) / position.exchange_stop_price
+            if change_pct < threshold:
+                return
+
+        result = self.exchange.update_stop_order(
+            old_order_id=position.exchange_stop_order_id,
+            symbol=position.symbol,
+            side=position.side,
+            quantity=position.quantity,
+            new_stop_price=position.stop_loss,
+        )
+
+        if result and result.get("_stop_already_filled"):
+            logger.warning(
+                f"Exchange stop for {position.symbol} was already filled during sync"
+            )
+            asyncio.ensure_future(self._handle_exchange_stop_fired(position))
+            return
+
+        if result and not result.get("_stop_already_filled"):
+            position.exchange_stop_order_id = str(result["id"])
+            position.exchange_stop_price = position.stop_loss
+            logger.info(
+                f"Exchange stop updated: {position.symbol} "
+                f"@ ${position.exchange_stop_price:.4f}"
+            )
+        elif result is None:
+            # Placement failed but cancel may have succeeded — position could be unprotected
+            position.exchange_stop_order_id = ""
+            position.exchange_stop_price = 0.0
+
+    async def _handle_exchange_stop_fired(self, position: Position):
+        """Handle a position that was closed by the exchange stop order."""
+        symbol = position.symbol
+
+        # Try to get actual fill price from exchange order history
+        fill_price = 0.0
+        if position.exchange_stop_order_id and self.exchange._exchange:
+            try:
+                order = self.exchange._exchange.fetch_order(
+                    position.exchange_stop_order_id, symbol
+                )
+                fill_price = float(order.get("average", order.get("price", 0)))
+            except Exception as e:
+                logger.warning(f"Could not fetch stop fill price for {symbol}: {e}")
+
+        # Fall back to stop price or current price
+        if fill_price <= 0:
+            fill_price = position.exchange_stop_price or position.stop_loss
+        if fill_price <= 0:
+            fill_price = self.exchange.get_current_price(symbol)
+
+        pnl = position.unrealized_pnl(fill_price)
+        pnl_pct = position.unrealized_pnl_pct(fill_price)
+
+        reason = "exchange_trailing_stop" if position.trailing_activated else "exchange_stop"
+
+        # Log to DB
+        await self.db.close_trade(
+            trade_id=position.trade_id,
+            close_price=fill_price,
+            pnl=pnl,
+            pnl_pct=pnl_pct,
+            reason=reason,
+        )
+
+        self.portfolio.remove_position(symbol)
+
+        # Register with risk manager
+        if pnl < 0:
+            self.risk_manager.register_stop_loss(symbol, self._tick_counter)
+        else:
+            self.risk_manager.register_win(symbol, self._tick_counter)
+
+        # Feed to adaptive tracker
+        if self.adaptive_tracker is not None:
+            from adaptive.performance_tracker import TradeRecord
+            risk_val = abs(position.entry_price - position.stop_loss) * position.quantity
+            reward_val = abs(position.take_profit - position.entry_price) * position.quantity
+            self.adaptive_tracker.record_trade(TradeRecord(
+                strategy=position.strategy,
+                symbol=symbol,
+                side=position.side,
+                pnl=pnl,
+                pnl_pct=pnl_pct,
+                entry_time=datetime.now(timezone.utc),
+                exit_time=datetime.now(timezone.utc),
+                exit_reason=reason,
+                confidence=position.confidence,
+                risk=risk_val,
+                reward=reward_val,
+            ))
+            await self.db.save_adaptive_trade(
+                strategy=position.strategy,
+                symbol=symbol,
+                side=position.side,
+                pnl=pnl,
+                pnl_pct=pnl_pct,
+                exit_reason=reason,
+                confidence=position.confidence,
+                risk=risk_val,
+                reward=reward_val,
+            )
+
+        emoji = "+" if pnl >= 0 else ""
+        logger.info(
+            f"EXCHANGE STOP FIRED {symbol} ({reason}): {emoji}${pnl:.2f} ({pnl_pct:.1%}) "
+            f"@ ${fill_price:.4f}"
+        )

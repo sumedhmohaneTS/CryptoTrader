@@ -150,6 +150,11 @@ NEWS_SENTIMENT_WEIGHT = 0.15    # How much news affects signal confidence
 MAX_ORDER_RETRIES = 3
 ORDER_RETRY_DELAY = 1.0          # Seconds (exponential backoff base)
 
+# Exchange-side stop-loss orders (STOP_MARKET on Binance)
+EXCHANGE_STOP_ORDERS_ENABLED = True       # Place STOP_MARKET on Binance for instant SL
+EXCHANGE_STOP_UPDATE_THRESHOLD = 0.001    # Only update if SL changed >0.1% (avoid API spam)
+EXCHANGE_STOP_MAX_RETRIES = 2             # Retries for stop order placement
+
 # Paper trading
 PAPER_INITIAL_BALANCE = 8.90    # Starting balance in USDT
 
