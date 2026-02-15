@@ -148,6 +148,36 @@ class Database:
         )
         await self.db.commit()
 
+    async def log_partial_close(
+        self,
+        symbol: str,
+        side: str,
+        entry_price: float,
+        close_price: float,
+        quantity: float,
+        pnl: float,
+        pnl_pct: float,
+        strategy: str = "",
+        confidence: float = 0.0,
+    ) -> int:
+        """Record a partial close as a new trade row (original stays open with reduced qty)."""
+        now = datetime.now(timezone.utc).isoformat()
+        cursor = await self.db.execute(
+            """INSERT INTO trades
+               (timestamp, symbol, side, price, quantity, cost, strategy,
+                signal_confidence, stop_loss, take_profit, status,
+                close_price, close_timestamp, pnl, pnl_pct, close_reason)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, 0, 'closed', ?, ?, ?, ?, 'staircase_partial')""",
+            (
+                now, symbol, side, entry_price, quantity,
+                entry_price * quantity, strategy, confidence,
+                close_price, now, pnl, pnl_pct,
+            ),
+        )
+        await self.db.commit()
+        logger.info(f"Partial close logged: {side} {quantity:.6f} {symbol} @ {close_price:.4f} | PnL: ${pnl:.4f}")
+        return cursor.lastrowid
+
     async def get_open_trades(self) -> list[dict]:
         cursor = await self.db.execute(
             "SELECT * FROM trades WHERE status='open'"

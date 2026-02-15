@@ -600,7 +600,11 @@ class TradingBot:
             elif self.risk_manager.check_take_profit(
                 position.entry_price, position.take_profit, current_price, position.side
             ):
-                if trailing_enabled and hybrid and not position.trailing_activated:
+                staircase = getattr(settings, "STAIRCASE_PROFIT_ENABLED", False)
+                if staircase and not position.partial_closed:
+                    # Staircase: close 50% at TP, move SL to breakeven, trail remainder
+                    close_reason = "staircase_partial"
+                elif trailing_enabled and hybrid and not position.trailing_activated:
                     # Hybrid mode: TP hit activates trailing instead of closing
                     position.trailing_activated = True
                     position.stop_loss = position.take_profit  # Lock in TP as new floor
@@ -627,7 +631,10 @@ class TradingBot:
                 self._update_trailing_stop(position, current_price)
 
         for symbol, close_price, reason in symbols_to_close:
-            await self._close_position(symbol, close_price, reason)
+            if reason == "staircase_partial":
+                await self._partial_close_position(symbol, close_price)
+            else:
+                await self._close_position(symbol, close_price, reason)
 
     def _update_trailing_stop(self, position: Position, current_price: float):
         """Update trailing stop: track extreme, trigger breakeven, trail the stop."""
@@ -743,6 +750,98 @@ class TradingBot:
             logger.debug(f"Momentum decay check failed for {position.symbol}: {e}")
 
         return False
+
+    async def _partial_close_position(self, symbol: str, close_price: float):
+        """Staircase: close partial qty at TP, move SL to breakeven, trail remainder."""
+        position = self.portfolio.get_position(symbol)
+        if not position or position.partial_closed:
+            return
+
+        close_pct = getattr(settings, "STAIRCASE_CLOSE_PCT", 0.50)
+        qty_to_close = position.quantity * close_pct
+
+        # Close partial on exchange
+        order = self.exchange.close_position(
+            symbol=symbol,
+            side=position.side,
+            quantity=qty_to_close,
+        )
+
+        if order:
+            # PnL on closed portion
+            if position.side == "buy":
+                partial_pnl = (close_price - position.entry_price) * qty_to_close
+            else:
+                partial_pnl = (position.entry_price - close_price) * qty_to_close
+            leverage = getattr(settings, "LEVERAGE", 1)
+            partial_margin = (position.entry_price * qty_to_close) / leverage
+            partial_pnl_pct = partial_pnl / partial_margin if partial_margin > 0 else 0.0
+
+            # Record partial close in DB
+            await self.db.log_partial_close(
+                symbol=symbol,
+                side=position.side,
+                entry_price=position.entry_price,
+                close_price=close_price,
+                quantity=qty_to_close,
+                pnl=partial_pnl,
+                pnl_pct=partial_pnl_pct,
+                strategy=position.strategy,
+                confidence=position.confidence,
+            )
+
+            # Update position: reduce qty, flag partial, activate trailing, SL to breakeven
+            remaining_qty = position.quantity - qty_to_close
+            self.portfolio.update_position_quantity(symbol, remaining_qty)
+            position.partial_closed = True
+            position.trailing_activated = True
+            position.stop_loss = position.entry_price  # Breakeven on remainder
+
+            # Track extreme for trailing
+            if position.side == "buy":
+                position.highest_price = max(position.highest_price, close_price)
+            else:
+                position.lowest_price = min(position.lowest_price, close_price)
+
+            # Register as win with risk manager
+            self.risk_manager.register_win(symbol, self._tick_counter)
+
+            # Feed partial to adaptive tracker
+            if self.adaptive_tracker is not None:
+                from adaptive.performance_tracker import TradeRecord
+                from datetime import datetime, timezone
+                risk_val = abs(position.entry_price - position.stop_loss) * qty_to_close
+                reward_val = abs(position.take_profit - position.entry_price) * qty_to_close
+                self.adaptive_tracker.record_trade(TradeRecord(
+                    strategy=position.strategy,
+                    symbol=symbol,
+                    side=position.side,
+                    pnl=partial_pnl,
+                    pnl_pct=partial_pnl_pct,
+                    entry_time=datetime.now(timezone.utc),
+                    exit_time=datetime.now(timezone.utc),
+                    exit_reason="staircase_partial",
+                    confidence=position.confidence,
+                    risk=risk_val,
+                    reward=reward_val,
+                ))
+                await self.db.save_adaptive_trade(
+                    strategy=position.strategy,
+                    symbol=symbol,
+                    side=position.side,
+                    pnl=partial_pnl,
+                    pnl_pct=partial_pnl_pct,
+                    exit_reason="staircase_partial",
+                    confidence=position.confidence,
+                    risk=risk_val,
+                    reward=reward_val,
+                )
+
+            logger.info(
+                f"STAIRCASE {symbol}: closed {close_pct:.0%} ({qty_to_close:.6f}) @ ${close_price:.4f} | "
+                f"PnL: +${partial_pnl:.2f} ({partial_pnl_pct:.1%}) | "
+                f"Remaining: {remaining_qty:.6f} | SL -> breakeven ${position.entry_price:.4f}"
+            )
 
     async def _close_position(self, symbol: str, close_price: float, reason: str):
         position = self.portfolio.get_position(symbol)

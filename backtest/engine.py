@@ -335,7 +335,11 @@ class BacktestEngine:
                     exit_reason = "trailing_stop" if position.trailing_activated else "stop_loss"
                 # Check take-profit
                 elif candle["high"] >= position.take_profit:
-                    if trailing_enabled and hybrid and not position.trailing_activated:
+                    staircase = getattr(settings, "STAIRCASE_PROFIT_ENABLED", False)
+                    if staircase and not position.partial_closed:
+                        exit_price = position.take_profit
+                        exit_reason = "staircase_partial"
+                    elif trailing_enabled and hybrid and not position.trailing_activated:
                         # Hybrid: TP hit activates trailing
                         position.trailing_activated = True
                         position.stop_loss = position.take_profit
@@ -348,7 +352,11 @@ class BacktestEngine:
                     exit_price = position.stop_loss
                     exit_reason = "trailing_stop" if position.trailing_activated else "stop_loss"
                 elif candle["low"] <= position.take_profit:
-                    if trailing_enabled and hybrid and not position.trailing_activated:
+                    staircase = getattr(settings, "STAIRCASE_PROFIT_ENABLED", False)
+                    if staircase and not position.partial_closed:
+                        exit_price = position.take_profit
+                        exit_reason = "staircase_partial"
+                    elif trailing_enabled and hybrid and not position.trailing_activated:
                         position.trailing_activated = True
                         position.stop_loss = position.take_profit
                         position.lowest_price = min(position.lowest_price, candle["low"])
@@ -369,7 +377,10 @@ class BacktestEngine:
                 self._update_trailing_stop(position, candle)
 
         for symbol, exit_price, exit_reason, ts in symbols_to_close:
-            self._close_position(symbol, exit_price, exit_reason, ts, bar_index)
+            if exit_reason == "staircase_partial":
+                self._partial_close_position(symbol, exit_price, ts, bar_index)
+            else:
+                self._close_position(symbol, exit_price, exit_reason, ts, bar_index)
 
     def _update_trailing_stop(self, position: Position, candle: pd.Series):
         """Update trailing stop using candle high/low (backtest version)."""
@@ -509,6 +520,97 @@ class BacktestEngine:
             })
 
             self.active_pairs = new_active
+
+    def _partial_close_position(self, symbol: str, exit_price: float, timestamp, bar_index: int = 0):
+        """Staircase: close partial qty at TP, move SL to breakeven, trail remainder."""
+        position = self.portfolio.get_position(symbol)
+        if position is None or position.partial_closed:
+            return
+
+        close_pct = getattr(settings, "STAIRCASE_CLOSE_PCT", 0.50)
+        qty_to_close = position.quantity * close_pct
+
+        # Apply slippage to exit
+        if position.side == "buy":
+            adjusted_exit = exit_price * (1 - SLIPPAGE_RATE)
+        else:
+            adjusted_exit = exit_price * (1 + SLIPPAGE_RATE)
+
+        # PnL on closed portion only
+        if position.side == "buy":
+            raw_pnl = (adjusted_exit - position.entry_price) * qty_to_close
+        else:
+            raw_pnl = (position.entry_price - adjusted_exit) * qty_to_close
+
+        exit_fee = adjusted_exit * qty_to_close * FEE_RATE
+        net_pnl = raw_pnl - exit_fee
+
+        # Return partial margin + PnL to balance
+        leverage = getattr(settings, "LEVERAGE", 1)
+        partial_margin = (position.entry_price * qty_to_close) / leverage
+        self.balance += partial_margin + net_pnl
+
+        entry_fee = position.entry_price * qty_to_close * FEE_RATE
+        total_fees = entry_fee + exit_fee
+        pnl_pct = net_pnl / partial_margin if partial_margin > 0 else 0.0
+
+        # Record as a closed trade
+        trade = ClosedTrade(
+            symbol=symbol,
+            side=position.side,
+            strategy=position.strategy,
+            entry_price=position.entry_price,
+            exit_price=adjusted_exit,
+            quantity=qty_to_close,
+            entry_time=getattr(position, "_entry_time", timestamp),
+            exit_time=timestamp,
+            pnl=net_pnl,
+            pnl_pct=pnl_pct,
+            fees=total_fees,
+            exit_reason="staircase_partial",
+            confidence=position.confidence,
+        )
+        self.closed_trades.append(trade)
+
+        # Update position: reduce qty, flag partial, activate trailing, SL to breakeven
+        remaining_qty = position.quantity - qty_to_close
+        self.portfolio.update_position_quantity(symbol, remaining_qty)
+        position.partial_closed = True
+        position.trailing_activated = True
+        position.stop_loss = position.entry_price  # Breakeven on remainder
+
+        # Track extreme for trailing
+        if position.side == "buy":
+            position.highest_price = max(position.highest_price, exit_price)
+        else:
+            position.lowest_price = min(position.lowest_price, exit_price)
+
+        # Register as win with risk manager
+        self.risk_manager.register_win(symbol, bar_index)
+
+        # Feed to adaptive tracker
+        if self.adaptive_tracker is not None:
+            from adaptive.performance_tracker import TradeRecord
+            risk = abs(position.entry_price - position.stop_loss) * qty_to_close
+            reward = abs(position.take_profit - position.entry_price) * qty_to_close
+            self.adaptive_tracker.record_trade(TradeRecord(
+                strategy=position.strategy,
+                symbol=symbol,
+                side=position.side,
+                pnl=net_pnl,
+                pnl_pct=pnl_pct,
+                entry_time=getattr(position, "_entry_time", timestamp),
+                exit_time=timestamp,
+                exit_reason="staircase_partial",
+                confidence=position.confidence,
+                risk=risk,
+                reward=reward,
+            ))
+
+        logger.debug(
+            f"STAIRCASE {position.side.upper()} {symbol}: closed {close_pct:.0%} @ {adjusted_exit:.4f} | "
+            f"PnL: ${net_pnl:.4f} ({pnl_pct:.2%}) | Remaining: {remaining_qty:.6f}"
+        )
 
     def _close_position(self, symbol: str, exit_price: float, reason: str, timestamp, bar_index: int = 0):
         """Close a position and record the trade."""

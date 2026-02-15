@@ -25,6 +25,10 @@ class Position:
     trailing_activated: bool = False     # True once breakeven trigger hit
     entry_regime: str = ""              # Market regime at entry (for vol-aware trailing)
 
+    # Staircase profit taking
+    partial_closed: bool = False        # True after partial close at TP (guard against double-execution)
+    original_quantity: float = 0.0      # Track initial size for logging
+
     def __post_init__(self):
         # Auto-compute initial_risk if not provided
         if self.initial_risk == 0.0 and self.stop_loss > 0:
@@ -34,6 +38,9 @@ class Position:
             self.highest_price = self.entry_price
         if self.lowest_price == 0.0:
             self.lowest_price = self.entry_price
+        # Track original quantity for staircase logging
+        if self.original_quantity == 0.0:
+            self.original_quantity = self.quantity
 
     @property
     def cost(self) -> float:
@@ -80,6 +87,13 @@ class Portfolio:
 
     def get_position(self, symbol: str) -> Position | None:
         return self.positions.get(symbol)
+
+    def update_position_quantity(self, symbol: str, new_qty: float):
+        """Update quantity in-place (for partial closes — no removal)."""
+        pos = self.positions.get(symbol)
+        if pos:
+            pos.quantity = new_qty
+            logger.info(f"Position quantity updated: {symbol} -> {new_qty:.6f}")
 
     def calculate_portfolio_value(
         self, usdt_balance: float, prices: dict[str, float]

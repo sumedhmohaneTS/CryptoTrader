@@ -64,6 +64,10 @@ TRAILING_HYBRID = True           # True = hit fixed TP first, then trail for mor
 BREAKEVEN_RR = 1.0               # Move stop to breakeven when R:R reaches 1.0 (lock profits sooner)
 TRAILING_STOP_ATR_MULTIPLIER = 1.5  # Trail at 1.5x ATR behind extreme
 
+# Staircase profit taking — close partial at TP, trail remainder
+STAIRCASE_PROFIT_ENABLED = True     # Close 50% at TP, trail remaining 50%
+STAIRCASE_CLOSE_PCT = 0.50         # Fraction to close at TP
+
 # Dynamic risk controls
 COOLDOWN_BARS = 5                # Wait 5 bars after stop-loss
 MAX_CONSECUTIVE_LOSSES = 2       # After 2 consecutive losses, double cooldown
