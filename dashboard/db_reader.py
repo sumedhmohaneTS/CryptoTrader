@@ -3,6 +3,8 @@ import os
 import re
 from datetime import datetime, timezone, timedelta
 
+from config import settings
+
 BOT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 DB_PATH = os.path.join(BOT_DIR, "data", "trades.db")
 
@@ -149,13 +151,13 @@ def get_risk_metrics() -> dict:
         daily_pnl = current - start_val
         daily_pnl_pct = daily_pnl / start_val if start_val > 0 else 0
 
-        # Check if trading is halted by looking at recent log patterns
+        # Check if trading is halted — use same thresholds as bot settings
         trading_halted = False
         halt_reason = ""
-        if daily_pnl_pct <= -0.10:
+        if daily_pnl_pct <= -settings.DAILY_LOSS_LIMIT_PCT:
             trading_halted = True
             halt_reason = f"Daily loss limit hit: {daily_pnl_pct:.1%}"
-        if peak > 0 and drawdown_pct >= 0.30:
+        if peak > 0 and drawdown_pct >= settings.MAX_DRAWDOWN_PCT:
             trading_halted = True
             halt_reason = f"Max drawdown circuit breaker: {drawdown_pct:.1%}"
 
