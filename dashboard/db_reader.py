@@ -130,8 +130,11 @@ def get_strategy_log(limit: int = 50) -> list[dict]:
 def get_risk_metrics() -> dict:
     conn = _get_conn()
     try:
+        # Use rolling 7-day peak for drawdown (not all-time)
+        seven_days_ago = (datetime.now(timezone.utc) - timedelta(days=7)).isoformat()
         peak_row = conn.execute(
-            "SELECT MAX(total_value) as peak FROM portfolio_snapshots"
+            "SELECT MAX(total_value) as peak FROM portfolio_snapshots WHERE timestamp >= ?",
+            (seven_days_ago,),
         ).fetchone()
         peak = peak_row["peak"] if peak_row and peak_row["peak"] else 0
 

@@ -405,7 +405,7 @@ class Exchange:
                     return "cancelled"
                 else:
                     logger.warning(f"Stop order {order_id} status={status} for {symbol}")
-                    return "cancelled"
+                    return "error"
             except Exception as e:
                 logger.error(f"Failed to fetch stop order {order_id} status: {e}")
                 return "error"

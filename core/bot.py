@@ -185,6 +185,9 @@ class TradingBot:
                         self.risk_manager.reset_daily(total_value)
                         last_daily_reset = now.date()
                         logger.info(f"Daily reset. Portfolio: ${total_value:.2f}")
+                        # Cleanup old DB data (snapshots, strategy logs >30 days)
+                        if self.db:
+                            await self.db.cleanup_old_data(retention_days=30)
                     else:
                         logger.warning("Daily reset skipped — API returned $0 balance")
 
@@ -530,6 +533,14 @@ class TradingBot:
                     else:
                         signal.stop_loss = signal.entry_price + new_risk
                         signal.take_profit = signal.entry_price - new_risk * strat_rr
+                    # Re-check MIN_SL after adaptive rebuild
+                    new_sl_dist = abs(signal.entry_price - signal.stop_loss) / signal.entry_price
+                    if new_sl_dist < min_sl_pct:
+                        logger.info(
+                            f"Adaptive rebuild SL too tight: {new_sl_dist:.3%} < {min_sl_pct:.1%} "
+                            f"({signal.symbol} {signal.strategy})"
+                        )
+                        return
             else:
                 if not self.risk_manager.validate_signal(signal):
                     return
@@ -617,7 +628,7 @@ class TradingBot:
 
             # Recovered positions (SL/TP=0) — set emergency SL/TP based on entry price
             if position.stop_loss <= 0 or position.take_profit <= 0:
-                atr_estimate = position.entry_price * 0.015  # ~1.5% as fallback ATR
+                atr_estimate = position.entry_price * getattr(settings, "MIN_SL_DISTANCE_PCT", 0.015)
                 if position.side == "buy":
                     position.stop_loss = position.entry_price - 2 * atr_estimate
                     position.take_profit = position.entry_price + 3 * atr_estimate
@@ -821,6 +832,11 @@ class TradingBot:
                     f"STAIRCASE {symbol}: exchange stop already fired — aborting staircase"
                 )
                 await self._handle_exchange_stop_fired(position)
+                return
+            if cancel_result == "error":
+                logger.error(
+                    f"STAIRCASE {symbol}: failed to cancel exchange stop — aborting for safety"
+                )
                 return
             position.exchange_stop_order_id = ""
             position.exchange_stop_price = 0.0

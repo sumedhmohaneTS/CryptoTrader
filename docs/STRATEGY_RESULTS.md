@@ -879,6 +879,70 @@ Staircase locks in 50% of the position as real profit at TP, then trails the rem
 
 ---
 
+## Test 23: Symmetric RSI Scoring for SELL Signals — CURRENT LIVE CONFIG
+
+**Date**: Feb 16, 2026
+**Changes**: Fixed asymmetric RSI confidence scoring in momentum SELL signals. The BUY path gave +0.15 confidence when RSI was in the 45-70 sweet spot, but the SELL path required RSI > 55 for the same bonus — which is unreachable in actual downtrends where RSI sits at 20-45. This meant only 0.19% of sell signals (23 out of 11,819) ever reached the 0.78 confidence threshold. The bot was structurally unable to short.
+
+**Fix**:
+1. **SELL RSI sweet spot**: 30 < RSI < 55 gives +0.15 confidence (mirrors BUY's 45-70)
+2. **SELL RSI oversold warning**: RSI <= RSI_OVERSOLD gives -0.20 penalty (mirrors BUY's overbought warning)
+
+| Setting | Value |
+|---------|-------|
+| Leverage | 25x |
+| Timeframe | 15m |
+| Pairs | BTC, SOL, XRP, DOGE, AVAX, SUI, RENDER, LINK, AXS, ZEC (10 pairs) |
+| Position size | 15% |
+| Per-strategy SL | momentum 1.5 ATR, mean_reversion 0.8 ATR, breakout 1.5 ATR |
+| Per-strategy R:R | momentum 2.0, mean_reversion 1.2, breakout 2.0 |
+| Min SL distance | 1.5% from entry |
+| Trailing | Staircase (50% close at TP, trail remainder), breakeven at 1.0 R:R, 1.5 ATR trail |
+| Max positions | 5 |
+| Adaptive | Enabled, 50-trade rolling window, sizing 0.15-1.2x |
+| MTF gating | Graduated: STRONG (ADX>=25), WEAK (18-25, -0.08 conf), RANGING (<18, 3-bar hysteresis) |
+| Choppy filter | ATR/ATR_SMA > 1.15 AND ADX < 30 -> -0.12 momentum confidence |
+| **RSI scoring** | **Symmetric BUY/SELL: BUY 45-70, SELL 30-55 sweet spots** |
+
+### IS Results (Nov 2025 - Feb 2026)
+
+| Metric | Value | vs Test 22 |
+|--------|-------|------------|
+| **Return** | **+50.54%** | +7.46pp |
+| Trades | 473 | +113 |
+| Max Drawdown | 28.16% | +4.43pp |
+
+**Per-strategy PnL**: Momentum +$82.88 (dominant — more shorts now taken)
+
+### OOS Results (Jun - Oct 2025)
+
+| Metric | Value | vs Test 22 |
+|--------|-------|------------|
+| **Return** | **+18.00%** | +38.14pp (was -20.14%) |
+| **Sharpe** | **0.95** | — |
+| **Profit Factor** | **1.19** | — |
+| Max Drawdown | 28.33% | — |
+| Trades | 705 | +205 |
+| Win Rate | 57.4% | — |
+| Fees | $22.56 | — |
+
+**Per-strategy PnL**: Momentum +$14.52 (510 trades, 59.4% WR), MR +$4.27 (154 trades, 52.6% WR), Breakout +$10.49 (41 trades, 51.2% WR)
+
+**All 3 strategies profitable in OOS.**
+
+### Why This Outperforms Test 22
+
+The asymmetric RSI scoring was a structural bug that prevented shorting. In a bearish market:
+- RSI sits at 20-45 — the old code required RSI > 55 for sell confidence (never triggered)
+- RSI < 25 penalty fired exactly when shorts should be most confident
+- Result: bot was long-biased in all market conditions
+
+The fix unlocks the short side of the book, allowing momentum to capture bearish moves. The OOS swing from -20% to +18% (+38pp) is almost entirely from new profitable short trades.
+
+**Verdict**: Critical bug fix that restores the bot's ability to trade both directions. Massive OOS improvement. All three strategies profitable. Deployed to live trading Feb 16, 2026.
+
+---
+
 ## Summary: All Tests Comparison
 
 | Test | Config | Return | Sharpe | Trades | Win Rate | Max DD | PF |
@@ -908,8 +972,10 @@ Staircase locks in 50% of the position as real profit at TP, then trails the rem
 | **21** | **25x, 15m, choppy market filter (IS)** | **+54.54%** | **2.17** | **264** | **50.4%** | **26.64%** | **1.31** |
 | **21** | **25x, 15m, choppy market filter (OOS)** | **+132.00%** | **3.07** | **373** | **49.6%** | **23.44%** | **1.87** |
 | 21 | 25x, 15m, choppy market filter (Jan-May 2025) | -15.47% | -1.13 | 340 | 47.9% | 29.16% | 0.92 |
-| **22** | **25x, 15m, staircase profit taking (IS)** | **+43.08%** | **2.30** | **360** | **57.8%** | **23.73%** | **1.34** |
-| **22** | **25x, 15m, staircase profit taking (WF OOS avg)** | **+16.60%** | **—** | **—** | **—** | **—** | **—** |
+| 22 | 25x, 15m, staircase profit taking (IS) | +43.08% | 2.30 | 360 | 57.8% | 23.73% | 1.34 |
+| 22 | 25x, 15m, staircase profit taking (WF OOS avg) | +16.60% | — | — | — | — | — |
+| **23** | **25x, 15m, symmetric RSI scoring (IS)** | **+50.54%** | **—** | **473** | **—** | **28.16%** | **—** |
+| **23** | **25x, 15m, symmetric RSI scoring (OOS)** | **+18.00%** | **0.95** | **705** | **57.4%** | **28.33%** | **1.19** |
 
 ---
 
@@ -952,6 +1018,9 @@ Staircase locks in 50% of the position as real profit at TP, then trails the rem
 35. **Some periods will lose money** -- adaptive system correctly throttles sizing to 0.17x during drawdowns; don't over-optimize to make every period profitable (risks curve-fitting)
 36. **Staircase profit taking improves risk profile** -- closing 50% at TP locks cash, trails remainder; IS return drops ~11pp but Sharpe improves (+0.13), DD drops (-3pp), win rate jumps (+7pp), OOS avg improves +81%
 
-## Best Configuration (Test 22 -- LIVE)
+37. **Momentum SELL RSI must be symmetric with BUY** -- old code required RSI > 55 for sell confidence (unreachable in downtrends). Fix: 30-55 mirrors BUY's 45-70. Turned OOS from -20% to +18%
+38. **Asymmetric indicator logic is a silent killer** -- the bot ran live for 5 days long-biased because of this one bug; always verify BUY/SELL logic is symmetric
 
-25x leverage, 15m timeframe, **staircase profit taking** (50% close at TP, trail remaining 50%, breakeven at 1.0 R:R), 10 static pairs, 15% position size, 5 max positions, per-strategy SL/R:R, adaptive sizing **capped at 1.2x**, min SL distance **1.5%**, graduated MTF regime gating (STRONG: 4h ADX >= 25, WEAK: 18-25 with -0.08 conf penalty, RANGING: < 18 after 3-bar hysteresis), **choppy filter** (ATR/ATR_SMA > 1.15 AND ADX < 30 -> -0.12 momentum conf). **IS: +43.08% (Sharpe 2.30), WF OOS avg: +16.60% (4/6 windows profitable).** Better risk-adjusted metrics than Test 21 with significantly improved OOS generalization.
+## Best Configuration (Test 23 -- LIVE)
+
+25x leverage, 15m timeframe, **staircase profit taking** (50% close at TP, trail remaining 50%, breakeven at 1.0 R:R), 10 static pairs, 15% position size, 5 max positions, per-strategy SL/R:R, adaptive sizing **capped at 1.2x**, min SL distance **1.5%**, graduated MTF regime gating (STRONG: 4h ADX >= 25, WEAK: 18-25 with -0.08 conf penalty, RANGING: < 18 after 3-bar hysteresis), **choppy filter** (ATR/ATR_SMA > 1.15 AND ADX < 30 -> -0.12 momentum conf), **symmetric RSI scoring** (BUY 45-70, SELL 30-55 sweet spots). **IS: +50.54%, OOS: +18.00% (all 3 strategies profitable).** Restored bot's ability to short in bearish markets.

@@ -303,6 +303,29 @@ class Database:
         )
         await self.db.commit()
 
+    async def cleanup_old_data(self, retention_days: int = 30):
+        """Delete snapshots and strategy logs older than retention period."""
+        cutoff = (datetime.now(timezone.utc) - __import__('datetime').timedelta(days=retention_days)).isoformat()
+        result = await self.db.execute(
+            "DELETE FROM portfolio_snapshots WHERE timestamp < ?", (cutoff,)
+        )
+        snap_deleted = result.rowcount
+        result = await self.db.execute(
+            "DELETE FROM strategy_log WHERE timestamp < ?", (cutoff,)
+        )
+        log_deleted = result.rowcount
+        result = await self.db.execute(
+            "DELETE FROM derivatives_snapshots WHERE timestamp < ?", (cutoff,)
+        )
+        deriv_deleted = result.rowcount
+        await self.db.commit()
+        if snap_deleted or log_deleted or deriv_deleted:
+            logger.info(
+                f"DB cleanup: deleted {snap_deleted} snapshots, "
+                f"{log_deleted} strategy logs, {deriv_deleted} derivatives snapshots "
+                f"(older than {retention_days} days)"
+            )
+
     async def get_peak_portfolio_value(self) -> float:
         cursor = await self.db.execute(
             "SELECT MAX(total_value) FROM portfolio_snapshots"
