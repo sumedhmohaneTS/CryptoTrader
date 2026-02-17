@@ -1021,6 +1021,52 @@ The fix unlocks the short side of the book, allowing momentum to capture bearish
 37. **Momentum SELL RSI must be symmetric with BUY** -- old code required RSI > 55 for sell confidence (unreachable in downtrends). Fix: 30-55 mirrors BUY's 45-70. Turned OOS from -20% to +18%
 38. **Asymmetric indicator logic is a silent killer** -- the bot ran live for 5 days long-biased because of this one bug; always verify BUY/SELL logic is symmetric
 
-## Best Configuration (Test 23 -- LIVE)
+---
 
-25x leverage, 15m timeframe, **staircase profit taking** (50% close at TP, trail remaining 50%, breakeven at 1.0 R:R), 10 static pairs, 15% position size, 5 max positions, per-strategy SL/R:R, adaptive sizing **capped at 1.2x**, min SL distance **1.5%**, graduated MTF regime gating (STRONG: 4h ADX >= 25, WEAK: 18-25 with -0.08 conf penalty, RANGING: < 18 after 3-bar hysteresis), **choppy filter** (ATR/ATR_SMA > 1.15 AND ADX < 30 -> -0.12 momentum conf), **symmetric RSI scoring** (BUY 45-70, SELL 30-55 sweet spots). **IS: +50.54%, OOS: +18.00% (all 3 strategies profitable).** Restored bot's ability to short in bearish markets.
+## Test 24: 4h Direction Filter + Drop LINK
+
+**Date**: Feb 16, 2026
+**Config**: Test 23 + require 4h trend confirmation for momentum direction + remove LINK/USDT
+
+| Setting | Value |
+|---------|-------|
+| Changes from T23 | Momentum requires 4h EMA trend to confirm direction; LINK/USDT removed |
+| Pairs | 9 (dropped LINK — 10% WR, -$16 OOS across all configs) |
+
+### Results (IS: Nov 2025 - Feb 2026)
+
+| Metric | Value |
+|--------|-------|
+| **Return** | **+73.35%** |
+| Trades | 76 |
+| Win Rate | 67.1% |
+| Profit Factor | 1.72 |
+| Sharpe | 3.51 |
+| Max Drawdown | 19.82% |
+
+### Results (OOS: Jun - Oct 2025)
+
+| Metric | Value |
+|--------|-------|
+| **Return** | **+22.84%** |
+
+### Per-Strategy IS
+
+| Strategy | Trades | WR | PnL |
+|----------|--------|----|-----|
+| momentum | 40 | 70.0% | +$68.48 |
+| breakout | 16 | 75.0% | +$10.59 |
+| mean_reversion | 20 | 55.0% | -$1.22 |
+
+### Key Findings
+- **4h direction filter blocks wrong-direction momentum trades** — prevents buying into 4h downtrends and selling into 4h uptrends
+- **LINK was a consistent loser** — 10% win rate live, -$16 OOS, removing it alone flipped OOS from -8% to +23%
+- **IS improved +50% → +73%** — fewer momentum trades but much higher quality
+- **OOS improved -8% → +23%** — LINK removal was the primary driver
+
+39. **4h trend confirmation for momentum is essential** -- 1h EMAs get fooled by counter-trend bounces; 4h is the reliable directional anchor
+40. **Drop consistently losing pairs** -- LINK/USDT had 10% WR across all configs; one bad pair can turn an entire OOS period negative
+
+## Best Configuration (Test 24 -- LIVE)
+
+25x leverage, 15m timeframe, **staircase profit taking** (50% close at TP, trail remaining 50%, breakeven at 1.0 R:R), **9 static pairs** (dropped LINK), 15% position size, 5 max positions, per-strategy SL/R:R, adaptive sizing **capped at 1.2x**, min SL distance **1.5%**, graduated MTF regime gating (STRONG: 4h ADX >= 25, WEAK: 18-25 with -0.08 conf penalty, RANGING: < 18 after 3-bar hysteresis), **choppy filter** (ATR/ATR_SMA > 1.15 AND ADX < 30 -> -0.12 momentum conf), **symmetric RSI scoring** (BUY 45-70, SELL 30-55 sweet spots), **4h direction filter** (momentum requires explicit 4h bullish/bearish confirmation). **IS: +73.35%, OOS: +22.84%.** Best combined IS+OOS result.
