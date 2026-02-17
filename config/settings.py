@@ -20,7 +20,7 @@ MARGIN_TYPE = "ISOLATED"         # ISOLATED — caps loss per position
 DEFAULT_PAIRS = [
     "BTC/USDT", "SOL/USDT", "XRP/USDT",
     "DOGE/USDT", "AVAX/USDT", "SUI/USDT",
-    "RENDER/USDT", "LINK/USDT",
+    "RENDER/USDT",
     "AXS/USDT", "ZEC/USDT",
 ]
 

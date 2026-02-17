@@ -270,6 +270,26 @@ class StrategyManager:
                 reason=f"Blocked by higher TF ({htf_trends})",
             )
 
+        # Momentum requires 4h trend to explicitly confirm direction
+        # (1h can get fooled by bounces, 4h is the reliable anchor)
+        if signal.strategy == "momentum":
+            htf_4h = htf_trends.get("4h", "neutral")
+            direction_ok = (
+                (signal.signal == Signal.BUY and htf_4h == "bullish") or
+                (signal.signal == Signal.SELL and htf_4h == "bearish")
+            )
+            if not direction_ok:
+                logger.info(
+                    f"MTF FILTER: momentum {signal.signal.value} blocked — "
+                    f"4h trend is '{htf_4h}', needs explicit confirmation ({htf_trends})"
+                )
+                return TradeSignal(
+                    signal=Signal.HOLD, confidence=0.0, strategy=signal.strategy,
+                    symbol=signal.symbol, entry_price=signal.entry_price,
+                    stop_loss=0, take_profit=0,
+                    reason=f"Momentum blocked: 4h trend '{htf_4h}' ({htf_trends})",
+                )
+
         if aligned > 0:
             # Boost confidence for aligned signals
             boost = 0.10 * aligned
