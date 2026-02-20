@@ -24,9 +24,19 @@ class Exchange:
                     "apiKey": api_key or settings.BINANCE_API_KEY,
                     "secret": api_secret or settings.BINANCE_API_SECRET,
                     "enableRateLimit": True,
-                    "options": {"defaultType": "future"},
+                    "options": {
+                        "defaultType": "future",
+                        "adjustForTimeDifference": True,
+                        "recvWindow": 10000,
+                    },
                 }
             )
+            # Sync local clock with Binance server to avoid timestamp errors
+            try:
+                self._exchange.load_time_difference()
+                logger.info(f"Clock synced with Binance (offset: {self._exchange.options.get('timeDifference', 0)}ms)")
+            except Exception as e:
+                logger.warning(f"Clock sync failed: {e}")
             # Set up futures: leverage and margin type per symbol
             self._setup_futures()
             logger.info(f"Exchange initialized in LIVE FUTURES mode ({settings.LEVERAGE}x leverage)")
