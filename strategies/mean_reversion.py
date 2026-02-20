@@ -59,15 +59,18 @@ class MeanReversionStrategy(BaseStrategy):
                 confidence += 0.18
                 reason_parts.append("Price at lower Bollinger Band")
 
-            # RSI oversold is critical for mean reversion (tighter bands)
+            # RSI oversold confirmation (graduated — harsh penalty only when clearly wrong)
             if rsi <= settings.RSI_OVERSOLD:
                 confidence += 0.25
                 reason_parts.append(f"RSI={rsi:.0f} oversold")
-            elif rsi <= 32:
-                confidence += 0.10
+            elif rsi <= 35:
+                confidence += 0.15
                 reason_parts.append(f"RSI={rsi:.0f} near oversold")
-            else:
-                confidence -= 0.15  # Not oversold = weak mean reversion setup
+            elif rsi <= 45:
+                confidence += 0.05
+                reason_parts.append(f"RSI={rsi:.0f} mildly oversold")
+            elif rsi > 55:
+                confidence -= 0.10
                 reason_parts.append(f"RSI={rsi:.0f} not oversold")
 
             # Bullish candle at support = reversal confirmation
@@ -115,14 +118,18 @@ class MeanReversionStrategy(BaseStrategy):
                 confidence += 0.18
                 reason_parts.append("Price at upper Bollinger Band")
 
+            # RSI overbought confirmation (graduated — mirror of BUY side)
             if rsi >= settings.RSI_OVERBOUGHT:
                 confidence += 0.25
                 reason_parts.append(f"RSI={rsi:.0f} overbought")
-            elif rsi >= 68:
-                confidence += 0.10
+            elif rsi >= 65:
+                confidence += 0.15
                 reason_parts.append(f"RSI={rsi:.0f} near overbought")
-            else:
-                confidence -= 0.15
+            elif rsi >= 55:
+                confidence += 0.05
+                reason_parts.append(f"RSI={rsi:.0f} mildly overbought")
+            elif rsi < 45:
+                confidence -= 0.10
                 reason_parts.append(f"RSI={rsi:.0f} not overbought")
 
             # Bearish reversal candle

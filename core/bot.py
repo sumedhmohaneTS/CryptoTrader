@@ -503,15 +503,23 @@ class TradingBot:
                 if signal.stop_loss <= 0:
                     return
 
-                # Minimum SL distance — reject if stop is within noise floor
+                # Minimum SL distance — widen to floor instead of rejecting
                 min_sl_pct = getattr(settings, "MIN_SL_DISTANCE_PCT", 0.015)
                 sl_distance_pct = abs(signal.entry_price - signal.stop_loss) / signal.entry_price
                 if sl_distance_pct < min_sl_pct:
+                    # Widen SL to minimum floor and adjust TP to maintain R:R
+                    min_sl_dist = signal.entry_price * min_sl_pct
+                    strat_rr = overrides.rr_ratio.get(signal.strategy, settings.REWARD_RISK_RATIO)
+                    if signal.signal == Signal.BUY:
+                        signal.stop_loss = signal.entry_price - min_sl_dist
+                        signal.take_profit = signal.entry_price + min_sl_dist * strat_rr
+                    else:
+                        signal.stop_loss = signal.entry_price + min_sl_dist
+                        signal.take_profit = signal.entry_price - min_sl_dist * strat_rr
                     logger.info(
-                        f"SL too tight: {sl_distance_pct:.3%} < {min_sl_pct:.1%} min "
+                        f"SL widened to floor: {sl_distance_pct:.3%} -> {min_sl_pct:.1%} "
                         f"({signal.symbol} {signal.strategy})"
                     )
-                    return
 
                 risk = abs(signal.entry_price - signal.stop_loss)
                 reward = abs(signal.take_profit - signal.entry_price)
@@ -533,14 +541,20 @@ class TradingBot:
                     else:
                         signal.stop_loss = signal.entry_price + new_risk
                         signal.take_profit = signal.entry_price - new_risk * strat_rr
-                    # Re-check MIN_SL after adaptive rebuild
+                    # Re-check MIN_SL after adaptive rebuild — widen if needed
                     new_sl_dist = abs(signal.entry_price - signal.stop_loss) / signal.entry_price
                     if new_sl_dist < min_sl_pct:
+                        min_sl_dist = signal.entry_price * min_sl_pct
+                        if signal.signal == Signal.BUY:
+                            signal.stop_loss = signal.entry_price - min_sl_dist
+                            signal.take_profit = signal.entry_price + min_sl_dist * strat_rr
+                        else:
+                            signal.stop_loss = signal.entry_price + min_sl_dist
+                            signal.take_profit = signal.entry_price - min_sl_dist * strat_rr
                         logger.info(
-                            f"Adaptive rebuild SL too tight: {new_sl_dist:.3%} < {min_sl_pct:.1%} "
+                            f"Adaptive rebuild SL widened: {new_sl_dist:.3%} -> {min_sl_pct:.1%} "
                             f"({signal.symbol} {signal.strategy})"
                         )
-                        return
             else:
                 if not self.risk_manager.validate_signal(signal):
                     return

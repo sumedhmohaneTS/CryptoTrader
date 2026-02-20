@@ -39,7 +39,7 @@ REWARD_RISK_RATIO = 2.0          # Fixed 2:1 R:R (hybrid trailing extends beyond
 # Per-strategy SL/R:R (mean_reversion needs tighter stops + lower target in ranges)
 STRATEGY_SL_ATR_MULTIPLIER = {
     "momentum": 1.5,
-    "mean_reversion": 0.8,
+    "mean_reversion": 1.2,
     "breakout": 1.5,
 }
 STRATEGY_REWARD_RISK_RATIO = {
@@ -73,7 +73,7 @@ COOLDOWN_BARS = 5                # Wait 5 bars after stop-loss
 MAX_CONSECUTIVE_LOSSES = 2       # After 2 consecutive losses, double cooldown
 MAX_TRADES_PER_HOUR = 3          # Increased for 9 pairs
 MAX_TRADES_PER_DAY = 18          # Increased for 9 pairs
-MAX_SAME_DIRECTION_POSITIONS = 1 # 1 long or 1 short at a time
+MAX_SAME_DIRECTION_POSITIONS = 2 # Allow 2 concurrent longs or shorts (1 missed rallies, 3 caused correlated blowups)
 VOLATILE_REGIME_SIZING = 0.67    # Scale position size to 67% in volatile markets
 
 # Strategy parameters (tuned for 15m timeframe)
@@ -107,8 +107,8 @@ MIN_SIGNAL_CONFIDENCE = 0.75
 
 # Per-strategy confidence minimums (override MIN_SIGNAL_CONFIDENCE)
 STRATEGY_MIN_CONFIDENCE = {
-    "momentum": 0.78,              # Sweet spot — enough trades without too many marginal ones
-    "mean_reversion": 0.72,
+    "momentum": 0.72,              # Lowered from 0.78 — raw conf 0.30-0.50 + MTF boost needs room (0.68 was too loose)
+    "mean_reversion": 0.55,
     "breakout": 0.70,
 }
 
@@ -202,7 +202,7 @@ TRAIL_VOL_SCALE = {
 ENABLE_TRENDING_WEAK = True                     # Graduated MTF gating — IS +46%, OOS +207% (enabled Feb 12)
 TRENDING_WEAK_CONFIDENCE_PENALTY = 0.08         # Confidence reduction for weak trends
 MTF_STRONG_ADX_THRESHOLD = 25                   # 4h ADX >= 25 = strong trend (full momentum)
-MTF_WEAK_ADX_THRESHOLD = 18                     # 4h ADX < 18 = ranging (after hysteresis)
+MTF_WEAK_ADX_THRESHOLD = 15                     # 4h ADX < 15 = extra penalty (no more hard downgrade to RANGING)
 MTF_REJECTION_CONFIRMATIONS = 3                 # Consecutive bars below weak threshold before hard downgrade
 
 ADAPTIVE_ENABLED = True                     # Master switch for live bot

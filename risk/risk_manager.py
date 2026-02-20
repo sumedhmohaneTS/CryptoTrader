@@ -282,15 +282,24 @@ class RiskManager:
             logger.warning("No valid stop-loss, rejecting signal")
             return False
 
-        # Minimum SL distance — reject if stop is within noise floor
+        # Minimum SL distance — widen to floor instead of rejecting
         min_sl_pct = getattr(settings, "MIN_SL_DISTANCE_PCT", 0.015)
         sl_distance_pct = abs(signal.entry_price - signal.stop_loss) / signal.entry_price
         if sl_distance_pct < min_sl_pct:
+            min_sl_dist = signal.entry_price * min_sl_pct
+            min_rr = getattr(settings, "STRATEGY_REWARD_RISK_RATIO", {}).get(
+                signal.strategy, settings.REWARD_RISK_RATIO
+            )
+            if signal.signal.value == "BUY":
+                signal.stop_loss = signal.entry_price - min_sl_dist
+                signal.take_profit = signal.entry_price + min_sl_dist * min_rr
+            else:
+                signal.stop_loss = signal.entry_price + min_sl_dist
+                signal.take_profit = signal.entry_price - min_sl_dist * min_rr
             logger.info(
-                f"SL too tight: {sl_distance_pct:.3%} < {min_sl_pct:.1%} min "
+                f"SL widened to floor: {sl_distance_pct:.3%} -> {min_sl_pct:.1%} "
                 f"({signal.symbol} {signal.strategy})"
             )
-            return False
 
         # Verify R:R ratio (per-strategy, small epsilon to avoid floating-point rejection)
         risk = abs(signal.entry_price - signal.stop_loss)

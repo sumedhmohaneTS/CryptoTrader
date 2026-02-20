@@ -71,6 +71,34 @@ class StrategyManager:
 
         signal = strategy.analyze(df, symbol)
 
+        # Multi-strategy fallback: if primary returns HOLD, try momentum as fallback
+        # (breakout excluded — false breakouts in ranging markets are the #1 loss source)
+        if signal.signal == Signal.HOLD:
+            tried = {strategy.name}
+            fallback_order = [
+                self.strategies[MarketRegime.TRENDING],       # momentum
+                self.strategies[MarketRegime.RANGING],        # mean_reversion
+            ]
+            best_fallback = None
+            for fb_strategy in fallback_order:
+                if fb_strategy.name in tried:
+                    continue
+                tried.add(fb_strategy.name)
+                try:
+                    fb = fb_strategy.analyze(df, symbol)
+                    if fb.signal != Signal.HOLD:
+                        if best_fallback is None or fb.confidence > best_fallback.confidence:
+                            best_fallback = fb
+                except Exception:
+                    pass
+            if best_fallback is not None:
+                logger.info(
+                    f"MULTI-STRATEGY FALLBACK: {strategy.name} HOLD -> "
+                    f"{best_fallback.strategy} {best_fallback.signal.value} "
+                    f"conf={best_fallback.confidence:.2f}"
+                )
+                signal = best_fallback
+
         # Apply TRENDING_WEAK confidence penalty
         if regime == MarketRegime.TRENDING_WEAK and signal.signal != Signal.HOLD:
             penalty = getattr(settings, "TRENDING_WEAK_CONFIDENCE_PENALTY", 0.08)
@@ -164,21 +192,15 @@ class StrategyManager:
 
             else:
                 # Below weak threshold — increment hysteresis counter
+                # But keep as TRENDING_WEAK with penalty instead of hard downgrade to RANGING
                 count = self._htf_rejection_count.get(symbol, 0) + 1
                 self._htf_rejection_count[symbol] = count
-                if count >= confirmations_needed:
-                    logger.info(
-                        f"MTF REGIME: TRENDING->RANGING "
-                        f"({confirm_tf} ADX={htf_adx:.1f} < {weak_threshold}, "
-                        f"{count}/{confirmations_needed} confirmations)"
-                    )
-                    return MarketRegime.RANGING
-                else:
-                    logger.info(
-                        f"MTF REGIME: TRENDING->TRENDING_WEAK (hysteresis "
-                        f"{count}/{confirmations_needed}, {confirm_tf} ADX={htf_adx:.1f})"
-                    )
-                    return MarketRegime.TRENDING_WEAK
+                logger.info(
+                    f"MTF REGIME: TRENDING->TRENDING_WEAK "
+                    f"({confirm_tf} ADX={htf_adx:.1f} < {weak_threshold}, "
+                    f"hysteresis {count})"
+                )
+                return MarketRegime.TRENDING_WEAK
 
         # Original binary gate (default behavior)
         threshold = getattr(settings, "MTF_REGIME_ADX_THRESHOLD", 22)
@@ -270,24 +292,41 @@ class StrategyManager:
                 reason=f"Blocked by higher TF ({htf_trends})",
             )
 
-        # Momentum requires 4h trend to explicitly confirm direction
-        # (1h can get fooled by bounces, 4h is the reliable anchor)
+        # Momentum checks 4h trend: confirmed = full pass, neutral = penalty, opposed = hard block
         if signal.strategy == "momentum":
             htf_4h = htf_trends.get("4h", "neutral")
-            direction_ok = (
+            direction_confirmed = (
                 (signal.signal == Signal.BUY and htf_4h == "bullish") or
                 (signal.signal == Signal.SELL and htf_4h == "bearish")
             )
-            if not direction_ok:
+            direction_opposed = (
+                (signal.signal == Signal.BUY and htf_4h == "bearish") or
+                (signal.signal == Signal.SELL and htf_4h == "bullish")
+            )
+            if direction_opposed:
                 logger.info(
                     f"MTF FILTER: momentum {signal.signal.value} blocked — "
-                    f"4h trend is '{htf_4h}', needs explicit confirmation ({htf_trends})"
+                    f"4h trend '{htf_4h}' opposed ({htf_trends})"
                 )
                 return TradeSignal(
                     signal=Signal.HOLD, confidence=0.0, strategy=signal.strategy,
                     symbol=signal.symbol, entry_price=signal.entry_price,
                     stop_loss=0, take_profit=0,
-                    reason=f"Momentum blocked: 4h trend '{htf_4h}' ({htf_trends})",
+                    reason=f"Momentum blocked: 4h trend '{htf_4h}' opposed ({htf_trends})",
+                )
+            elif not direction_confirmed:
+                # 4h neutral — allow with penalty instead of hard block
+                penalty = 0.10
+                new_conf = max(0.0, signal.confidence - penalty)
+                logger.info(
+                    f"MTF FILTER: momentum {signal.signal.value} penalty -{penalty} — "
+                    f"4h trend '{htf_4h}' neutral ({htf_trends})"
+                )
+                signal = TradeSignal(
+                    signal=signal.signal, confidence=new_conf, strategy=signal.strategy,
+                    symbol=signal.symbol, entry_price=signal.entry_price,
+                    stop_loss=signal.stop_loss, take_profit=signal.take_profit,
+                    reason=signal.reason + f"; 4h neutral penalty (-{penalty})",
                 )
 
         if aligned > 0:
