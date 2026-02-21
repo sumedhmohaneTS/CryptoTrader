@@ -250,6 +250,45 @@ class TradingBot:
                                 f"-- likely exchange stop fired"
                             )
                             await self._handle_exchange_stop_fired(pos)
+                    elif d["type"] == "orphan" and "exchange_pos" in d:
+                        # Adopt orphan positions the exchange has but bot doesn't track
+                        ex_pos = d["exchange_pos"]
+                        symbol = d["symbol"]
+                        position = Position(
+                            trade_id=0,
+                            symbol=symbol,
+                            side=ex_pos["side"],
+                            entry_price=ex_pos["entry_price"],
+                            quantity=ex_pos["contracts"],
+                            stop_loss=0.0,
+                            take_profit=0.0,
+                            strategy="recovered",
+                            confidence=0.0,
+                        )
+                        self.portfolio.add_position(position)
+                        logger.warning(
+                            f"ADOPTED orphan position: {ex_pos['side']} "
+                            f"{ex_pos['contracts']:.6f} {symbol} "
+                            f"@ ${ex_pos['entry_price']:.4f} | "
+                            f"uPnL: ${ex_pos['unrealized_pnl']:.4f}"
+                        )
+                        # Try to recover exchange stop order
+                        if getattr(settings, "EXCHANGE_STOP_ORDERS_ENABLED", False):
+                            stop_orders = self.exchange.get_open_stop_orders(symbol)
+                            if stop_orders:
+                                expected_stop_side = "sell" if ex_pos["side"] == "buy" else "buy"
+                                for so in stop_orders:
+                                    if so.get("side", "").lower() == expected_stop_side:
+                                        position.exchange_stop_order_id = str(so["id"])
+                                        stop_px = float(so.get("stopPrice", so.get("price", 0)))
+                                        position.exchange_stop_price = stop_px
+                                        if stop_px > 0:
+                                            position.stop_loss = stop_px
+                                        logger.info(
+                                            f"Recovered exchange stop for orphan {symbol}: "
+                                            f"order={so['id']} @ ${stop_px:.4f}"
+                                        )
+                                        break
 
         # Snapshot portfolio
         await self.db.snapshot_portfolio(
@@ -640,18 +679,30 @@ class TradingBot:
             if current_price <= 0:
                 continue
 
-            # Recovered positions (SL/TP=0) — set emergency SL/TP based on entry price
+            # Recovered positions (SL/TP=0) — set emergency SL/TP using current price
             if position.stop_loss <= 0 or position.take_profit <= 0:
-                atr_estimate = position.entry_price * getattr(settings, "MIN_SL_DISTANCE_PCT", 0.015)
+                sl_pct = getattr(settings, "MIN_SL_DISTANCE_PCT", 0.015)
+                # Use 3x MIN_SL from CURRENT price (not entry) to avoid tight stops
+                sl_distance = current_price * sl_pct * 3
+                pnl = position.unrealized_pnl(current_price)
                 if position.side == "buy":
-                    position.stop_loss = position.entry_price - 2 * atr_estimate
-                    position.take_profit = position.entry_price + 3 * atr_estimate
+                    # If profitable, set SL at breakeven (entry); otherwise wider from current
+                    if pnl > 0:
+                        position.stop_loss = position.entry_price
+                    else:
+                        position.stop_loss = current_price - sl_distance
+                    position.take_profit = current_price + sl_distance * 2
                 else:
-                    position.stop_loss = position.entry_price + 2 * atr_estimate
-                    position.take_profit = position.entry_price - 3 * atr_estimate
+                    if pnl > 0:
+                        position.stop_loss = position.entry_price
+                    else:
+                        position.stop_loss = current_price + sl_distance
+                    position.take_profit = current_price - sl_distance * 2
                 position.initial_risk = abs(position.entry_price - position.stop_loss)
                 logger.info(
-                    f"Set recovered SL/TP for {symbol}: SL=${position.stop_loss:.4f} TP=${position.take_profit:.4f}"
+                    f"Set recovered SL/TP for {symbol}: SL=${position.stop_loss:.4f} "
+                    f"TP=${position.take_profit:.4f} (uPnL=${pnl:.2f}, "
+                    f"{'breakeven SL' if pnl > 0 else 'emergency SL'})"
                 )
                 # Place exchange stop for recovered position if none exists
                 if not position.exchange_stop_order_id:

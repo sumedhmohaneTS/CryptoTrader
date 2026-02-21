@@ -1067,6 +1067,40 @@ The fix unlocks the short side of the book, allowing momentum to capture bearish
 39. **4h trend confirmation for momentum is essential** -- 1h EMAs get fooled by counter-trend bounces; 4h is the reliable directional anchor
 40. **Drop consistently losing pairs** -- LINK/USDT had 10% WR across all configs; one bad pair can turn an entire OOS period negative
 
-## Best Configuration (Test 24 -- LIVE)
+## Test 26: Penalty Cap + Confidence Boosters (VWAP, ROC, RelStrength, Fear & Greed) — REVERTED
 
-25x leverage, 15m timeframe, **staircase profit taking** (50% close at TP, trail remaining 50%, breakeven at 1.0 R:R), **9 static pairs** (dropped LINK), 15% position size, 5 max positions, per-strategy SL/R:R, adaptive sizing **capped at 1.2x**, min SL distance **1.5%**, graduated MTF regime gating (STRONG: 4h ADX >= 25, WEAK: 18-25 with -0.08 conf penalty, RANGING: < 18 after 3-bar hysteresis), **choppy filter** (ATR/ATR_SMA > 1.15 AND ADX < 30 -> -0.12 momentum conf), **symmetric RSI scoring** (BUY 45-70, SELL 30-55 sweet spots), **4h direction filter** (momentum requires explicit 4h bullish/bearish confirmation). **IS: +73.35%, OOS: +22.84%.** Best combined IS+OOS result.
+**Date**: Feb 20, 2026
+**Config**: Test 25 + penalty stacking cap + 4 new booster filters
+**Status**: REVERTED — both iterations regressed significantly
+
+| Setting | Value |
+|---------|-------|
+| Penalty cap (v1) | -0.20 max cumulative penalty |
+| Penalty cap (v2) | -0.25 max, require 2+ boosters |
+| VWAP aligned boost | v1: +0.10, v2: +0.05 |
+| ROC strong boost | v1: +0.10, v2: +0.05 |
+| BTC relative strength | v1: +0.08, v2: +0.04 |
+| Fear & Greed MR boost | v1: +0.12, v2: +0.06 |
+
+### Results (IS: Jun 2025 - Jan 2026)
+
+| Iteration | Return | Trades | WR | PF | Max DD |
+|-----------|--------|--------|-----|-----|--------|
+| v1 (full boosts) | **-31.67%** | 1036 | 59.2% | 0.92 | 36.08% |
+| v2 (halved + 2-req) | **-33.06%** | 837 | 57.5% | 0.79 | 35.21% |
+| T25 baseline | **+91.78%** | — | — | — | — |
+
+### Key Findings
+- **Penalty cap lets through bad signals** — the -0.30 stacking (TRENDING_WEAK + 4h neutral + choppy) was correctly identifying weak market conditions
+- **Boosters fire too often on 15m** — ROC >1%, price above VWAP, alt outperforming BTC are all common in crypto, so they boost nearly everything
+- **Circuit breaker fires by bar 5000** — too many marginal trades early on → 35% drawdown → trading stops completely
+- **Overtrading burns fees** — v1 had $32 in fees on $100 balance (32%)
+- **Even halved boosts + 2-booster requirement couldn't save it** — the fundamental approach of "boost confidence to overcome penalties" is wrong for this system
+
+41. **Never cap penalties that are doing useful filtering** — stacked penalties (-0.30) correctly block signals in genuinely weak conditions
+42. **Confidence boosters on 15m crypto are too noisy** — ROC, VWAP, relative strength fire on nearly every trade, adding no selectivity
+43. **"Dead pairs" = dead markets, not dead signals** — pairs get blocked because conditions don't support trading, not because filters are too aggressive
+
+## Best Configuration (Test 25 -- LIVE)
+
+25x leverage, 15m timeframe, **staircase profit taking** (50% close at TP, trail remaining 50%, breakeven at 1.0 R:R), **9 static pairs** (dropped LINK), 15% position size, 5 max positions, per-strategy SL/R:R, adaptive sizing **capped at 1.2x**, min SL distance **1.5%**, graduated MTF regime gating (STRONG: 4h ADX >= 25, WEAK: 15-25 with -0.08 conf penalty, no hard RANGING downgrade), **choppy filter** (ATR/ATR_SMA > 1.15 AND ADX < 30 -> -0.12 momentum conf), **multi-strategy fallback** (HOLD -> try momentum/MR, no breakout), **softer 4h direction gate** (opposed=block, neutral=-0.10 penalty), **MR RSI graduated scoring**, **MR SL 1.2 ATR**. **IS: +91.78%, OOS: +45.61% avg WF.** Best combined IS+OOS result.

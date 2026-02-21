@@ -592,6 +592,7 @@ class Exchange:
                             f"Exchange has {ex_pos['side']} {ex_pos['contracts']:.6f} {symbol} "
                             f"but bot doesn't track it"
                         ),
+                        "exchange_pos": ex_pos,
                     })
             else:
                 tracked = tracked_positions[symbol]

@@ -11,6 +11,7 @@ from dashboard.db_reader import (
     get_performance_report, get_derivatives_data,
 )
 from dashboard.price_service import PriceService
+from dashboard.exchange_view import get_exchange_live_summary
 
 app = Flask(
     __name__,
@@ -95,6 +96,12 @@ def api_performance():
 @app.route("/api/derivatives")
 def api_derivatives():
     return jsonify(get_derivatives_data())
+
+
+@app.route("/api/exchange")
+def api_exchange():
+    """Live exchange balance and positions — always matches Binance."""
+    return jsonify(get_exchange_live_summary())
 
 
 @app.route("/api/config")
