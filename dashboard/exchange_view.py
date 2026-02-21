@@ -20,8 +20,13 @@ def _get_exchange():
             "apiKey": settings.BINANCE_API_KEY,
             "secret": settings.BINANCE_API_SECRET,
             "enableRateLimit": True,
-            "options": {"defaultType": "future", "adjustForTimeDifference": True},
+            "options": {
+                "defaultType": "future",
+                "adjustForTimeDifference": True,
+                "recvWindow": 10000,
+            },
         })
+        _exchange.load_time_difference()
     return _exchange
 
 
