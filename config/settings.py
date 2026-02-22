@@ -54,6 +54,14 @@ CHOPPY_FILTER_ENABLED = True
 CHOPPY_ATR_RATIO_THRESHOLD = 1.15   # ATR/ATR_SMA > 1.15 = elevated volatility
 CHOPPY_ADX_CEILING = 30             # Only apply when ADX < 30 (strong trends unaffected)
 CHOPPY_CONFIDENCE_PENALTY = 0.12    # Confidence penalty for momentum in choppy conditions
+
+# Momentum surge boost — DISABLED (T27: IS +63% vs T25 +109%, OOS +20% vs +46%)
+# The extra trades at 0.55-0.65 confidence dragged returns down
+SURGE_BOOST_ENABLED = False
+SURGE_ADX_THRESHOLD = 30            # ADX >= 30 = strong directional trend
+SURGE_ROC3_THRESHOLD = 1.0          # |3-bar ROC| >= 1% = price accelerating
+SURGE_CONFIDENCE_BOOST = 0.15       # +0.15 confidence boost (pushes 0.55+ into tradeable range)
+
 DAILY_LOSS_LIMIT_PCT = 0.12      # Stop trading if down 12% in a day
 MAX_DRAWDOWN_PCT = 0.35          # Circuit breaker at 35% drawdown from peak
 MAX_OPEN_POSITIONS = 5           # Allow 5 concurrent positions

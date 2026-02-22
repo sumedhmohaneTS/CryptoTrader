@@ -738,7 +738,7 @@ class TradingBot:
                         f"(SL -> ${position.stop_loss:.4f})"
                     )
                     # Force-sync exchange stop (large SL jump, skip throttle)
-                    self._sync_exchange_stop(position, force=True)
+                    await self._sync_exchange_stop(position, force=True)
                 elif not trailing_enabled or not hybrid:
                     close_reason = "take_profit"
 
@@ -755,7 +755,7 @@ class TradingBot:
                 self._update_trailing_stop(position, current_price)
                 # Sync exchange stop if SL changed
                 if position.stop_loss != old_sl:
-                    self._sync_exchange_stop(position)
+                    await self._sync_exchange_stop(position)
 
         for symbol, close_price, reason in symbols_to_close:
             if reason == "staircase_partial":
@@ -1102,7 +1102,7 @@ class TradingBot:
                 f"@ ${position.stop_loss:.4f} — software SL remains as fallback"
             )
 
-    def _sync_exchange_stop(self, position: Position, force: bool = False):
+    async def _sync_exchange_stop(self, position: Position, force: bool = False):
         """Sync exchange stop with current software SL (throttled by threshold)."""
         if not getattr(settings, "EXCHANGE_STOP_ORDERS_ENABLED", False):
             return
@@ -1134,7 +1134,7 @@ class TradingBot:
             logger.warning(
                 f"Exchange stop for {position.symbol} was already filled during sync"
             )
-            asyncio.ensure_future(self._handle_exchange_stop_fired(position))
+            await self._handle_exchange_stop_fired(position)
             return
 
         if result and not result.get("_stop_already_filled"):
@@ -1175,16 +1175,27 @@ class TradingBot:
 
         reason = "exchange_trailing_stop" if position.trailing_activated else "exchange_stop"
 
-        # Log to DB
-        await self.db.close_trade(
-            trade_id=position.trade_id,
-            close_price=fill_price,
-            pnl=pnl,
-            pnl_pct=pnl_pct,
-            reason=reason,
-        )
+        # Log to DB and remove from portfolio — wrapped in try/except to prevent silent failures
+        try:
+            await self.db.close_trade(
+                trade_id=position.trade_id,
+                close_price=fill_price,
+                pnl=pnl,
+                pnl_pct=pnl_pct,
+                reason=reason,
+            )
+        except Exception as e:
+            logger.error(
+                f"CRITICAL: Failed to close trade in DB for {symbol} "
+                f"(trade_id={position.trade_id}): {e}"
+            )
 
-        self.portfolio.remove_position(symbol)
+        try:
+            self.portfolio.remove_position(symbol)
+        except Exception as e:
+            logger.error(
+                f"CRITICAL: Failed to remove {symbol} from portfolio: {e}"
+            )
 
         # Register with risk manager
         if pnl < 0:
@@ -1194,33 +1205,36 @@ class TradingBot:
 
         # Feed to adaptive tracker
         if self.adaptive_tracker is not None:
-            from adaptive.performance_tracker import TradeRecord
-            risk_val = abs(position.entry_price - position.stop_loss) * position.quantity
-            reward_val = abs(position.take_profit - position.entry_price) * position.quantity
-            self.adaptive_tracker.record_trade(TradeRecord(
-                strategy=position.strategy,
-                symbol=symbol,
-                side=position.side,
-                pnl=pnl,
-                pnl_pct=pnl_pct,
-                entry_time=datetime.now(timezone.utc),
-                exit_time=datetime.now(timezone.utc),
-                exit_reason=reason,
-                confidence=position.confidence,
-                risk=risk_val,
-                reward=reward_val,
-            ))
-            await self.db.save_adaptive_trade(
-                strategy=position.strategy,
-                symbol=symbol,
-                side=position.side,
-                pnl=pnl,
-                pnl_pct=pnl_pct,
-                exit_reason=reason,
-                confidence=position.confidence,
-                risk=risk_val,
-                reward=reward_val,
-            )
+            try:
+                from adaptive.performance_tracker import TradeRecord
+                risk_val = abs(position.entry_price - position.stop_loss) * position.quantity
+                reward_val = abs(position.take_profit - position.entry_price) * position.quantity
+                self.adaptive_tracker.record_trade(TradeRecord(
+                    strategy=position.strategy,
+                    symbol=symbol,
+                    side=position.side,
+                    pnl=pnl,
+                    pnl_pct=pnl_pct,
+                    entry_time=datetime.now(timezone.utc),
+                    exit_time=datetime.now(timezone.utc),
+                    exit_reason=reason,
+                    confidence=position.confidence,
+                    risk=risk_val,
+                    reward=reward_val,
+                ))
+                await self.db.save_adaptive_trade(
+                    strategy=position.strategy,
+                    symbol=symbol,
+                    side=position.side,
+                    pnl=pnl,
+                    pnl_pct=pnl_pct,
+                    exit_reason=reason,
+                    confidence=position.confidence,
+                    risk=risk_val,
+                    reward=reward_val,
+                )
+            except Exception as e:
+                logger.error(f"Failed to record adaptive trade for {symbol}: {e}")
 
         emoji = "+" if pnl >= 0 else ""
         logger.info(

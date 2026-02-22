@@ -1101,6 +1101,58 @@ The fix unlocks the short side of the book, allowing momentum to capture bearish
 42. **Confidence boosters on 15m crypto are too noisy** — ROC, VWAP, relative strength fire on nearly every trade, adding no selectivity
 43. **"Dead pairs" = dead markets, not dead signals** — pairs get blocked because conditions don't support trading, not because filters are too aggressive
 
+---
+
+## Test 27: Momentum Surge Boost (ADX + ROC3 confidence boost)
+
+**Date**: Feb 22, 2026
+**Base**: Test 25
+**Hypothesis**: Blocked signals with ADX >= 30 AND |3-bar ROC| >= 1% predict big moves 56% of the time — boosting their confidence by +0.15 should capture missed opportunities.
+
+| Setting | Value |
+|---------|-------|
+| SURGE_BOOST_ENABLED | True |
+| SURGE_ADX_THRESHOLD | 30 |
+| SURGE_ROC3_THRESHOLD | 1.0% |
+| SURGE_CONFIDENCE_BOOST | +0.15 |
+
+### Results
+
+| Metric | T27 (surge boost) | T25 (baseline) |
+|--------|-------------------|----------------|
+| **IS Return** | **+63.23%** | **+91.78%** |
+| **OOS Return (avg WF)** | **+20.12%** | **+45.61%** |
+
+OOS walk-forward windows: +6.24%, +5.13%, -16.74%, +82.37%, -24.53%, +68.27%
+
+### Key Findings
+- **Surge boost hurt both IS and OOS significantly** — extra trades at 0.55-0.65 confidence had insufficient edge at 25x leverage
+- **Signal analysis ≠ trade profitability** — 56% directional prediction is not enough after fees, slippage, and stop-loss
+- **The selectivity IS the strategy** — 95% of signals are correctly blocked; the 5% that pass (conf >= 0.72) have real edge
+- **ADX + ROC as predictors are necessary but not sufficient** — they predict direction better than random, but not well enough to overcome the costs of 25x leverage trading
+
+44. **Confidence boosting to capture "missed" big moves is counterproductive** — the signals are blocked for good reason; lowering the bar adds more losers than winners
+
+### Status: **DISABLED** (SURGE_BOOST_ENABLED = False)
+
+---
+
+## Bug Fixes (Feb 22, 2026)
+
+### Ghost position from exchange stop fire-and-forget
+
+**Problem**: When `_sync_exchange_stop()` detected that a STOP_MARKET order was already filled during a trailing stop update, it called `_handle_exchange_stop_fired()` via `asyncio.ensure_future()` (fire-and-forget). This was because `_sync_exchange_stop` was a sync function and couldn't `await`. If the handler raised any exception, it was silently swallowed — leaving the position as a ghost in the DB and portfolio.
+
+**Impact**: AXS/USDT trailing stop fired on Binance at 01:27:38 for +$1.67 profit, but the DB was never updated. The bot then tried to close the non-existent AXS position every tick, logging "Failed to close futures position" errors indefinitely.
+
+**Fix**:
+1. Made `_sync_exchange_stop()` async so it can properly `await`
+2. Replaced `asyncio.ensure_future()` with `await self._handle_exchange_stop_fired(position)`
+3. Updated both callers to `await self._sync_exchange_stop(...)`
+4. Added try/except with CRITICAL logging around `db.close_trade()` and `portfolio.remove_position()` in the handler
+
+---
+
 ## Best Configuration (Test 25 -- LIVE)
 
 25x leverage, 15m timeframe, **staircase profit taking** (50% close at TP, trail remaining 50%, breakeven at 1.0 R:R), **9 static pairs** (dropped LINK), 15% position size, 5 max positions, per-strategy SL/R:R, adaptive sizing **capped at 1.2x**, min SL distance **1.5%**, graduated MTF regime gating (STRONG: 4h ADX >= 25, WEAK: 15-25 with -0.08 conf penalty, no hard RANGING downgrade), **choppy filter** (ATR/ATR_SMA > 1.15 AND ADX < 30 -> -0.12 momentum conf), **multi-strategy fallback** (HOLD -> try momentum/MR, no breakout), **softer 4h direction gate** (opposed=block, neutral=-0.10 penalty), **MR RSI graduated scoring**, **MR SL 1.2 ATR**. **IS: +91.78%, OOS: +45.61% avg WF.** Best combined IS+OOS result.

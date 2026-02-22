@@ -135,6 +135,11 @@ class StrategyManager:
         if signal.signal != Signal.HOLD and derivatives_data and getattr(settings, "DERIVATIVES_ENABLED", False):
             signal = self._apply_derivatives_filter(signal, derivatives_data)
 
+        # Momentum surge boost: when ADX is strong AND price is accelerating,
+        # boost confidence to capture big moves that near-miss the threshold
+        if signal.signal != Signal.HOLD and getattr(settings, "SURGE_BOOST_ENABLED", False):
+            signal = self._apply_surge_boost(signal, df)
+
         logger.info(
             f"{symbol} | Regime: {regime.value} | Strategy: {strategy.name} | "
             f"Signal: {signal.signal.value} | Confidence: {signal.confidence:.2f} | "
@@ -212,6 +217,51 @@ class StrategyManager:
             return MarketRegime.RANGING
 
         return regime
+
+    def _apply_surge_boost(self, signal: TradeSignal, df: pd.DataFrame) -> TradeSignal:
+        """Boost confidence when ADX is strong AND price is accelerating (3-bar ROC).
+
+        Captures big moves that near-miss the confidence threshold.
+        Only fires on ~8% of signals — selective, not noisy.
+        """
+        if len(df) < 5:
+            return signal
+
+        latest = df.iloc[-1]
+        adx_col = f"ADX_{settings.ADX_PERIOD}"
+        adx = latest.get(adx_col, 0)
+
+        adx_threshold = getattr(settings, "SURGE_ADX_THRESHOLD", 30)
+        roc_threshold = getattr(settings, "SURGE_ROC3_THRESHOLD", 1.0)
+        boost = getattr(settings, "SURGE_CONFIDENCE_BOOST", 0.15)
+
+        if adx < adx_threshold:
+            return signal
+
+        # 3-bar rate of change
+        close_now = latest["close"]
+        close_3ago = df.iloc[-4]["close"] if len(df) >= 4 else close_now
+        roc_3 = abs((close_now - close_3ago) / close_3ago * 100) if close_3ago > 0 else 0
+
+        if roc_3 < roc_threshold:
+            return signal
+
+        # Verify direction alignment: ROC direction must match signal direction
+        roc_direction = "BUY" if close_now > close_3ago else "SELL"
+        if roc_direction != signal.signal.value.upper():
+            return signal
+
+        new_conf = signal.confidence + boost
+        logger.info(
+            f"SURGE BOOST: +{boost:.2f} confidence "
+            f"(ADX={adx:.1f}, ROC3={roc_3:.2f}%, dir={roc_direction})"
+        )
+        return TradeSignal(
+            signal=signal.signal, confidence=new_conf, strategy=signal.strategy,
+            symbol=signal.symbol, entry_price=signal.entry_price,
+            stop_loss=signal.stop_loss, take_profit=signal.take_profit,
+            reason=signal.reason + f"; surge boost (+{boost:.2f}, ADX={adx:.0f}, ROC3={roc_3:.1f}%)",
+        )
 
     def _apply_choppy_filter(self, signal: TradeSignal, df: pd.DataFrame) -> TradeSignal:
         """Penalize momentum signals when volatility is high but trend is weak (whipsaw)."""
