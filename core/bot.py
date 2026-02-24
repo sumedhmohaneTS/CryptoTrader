@@ -295,6 +295,14 @@ class TradingBot:
                                 f"-- likely exchange stop fired"
                             )
                             await self._handle_exchange_stop_fired(pos)
+                        elif pos:
+                            # No exchange stop ID — position vanished from exchange
+                            # (manual close, liquidation, or untracked stop)
+                            logger.warning(
+                                f"Ghost position {d['symbol']} has no exchange stop "
+                                f"-- closing as ghost_stopped"
+                            )
+                            await self._handle_exchange_stop_fired(pos)
                     elif d["type"] == "orphan" and "exchange_pos" in d:
                         # Adopt orphan positions the exchange has but bot doesn't track
                         ex_pos = d["exchange_pos"]
