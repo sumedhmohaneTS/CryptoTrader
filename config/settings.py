@@ -47,7 +47,7 @@ STRATEGY_REWARD_RISK_RATIO = {
     "mean_reversion": 1.2,
     "breakout": 2.0,
 }
-MIN_SL_DISTANCE_PCT = 0.015      # Reject signals with SL < 1.5% from entry (noise floor at 25x)
+MIN_SL_DISTANCE_PCT = 0.020      # Reject signals with SL < 2.0% from entry (1.5% got clipped by noise at 25x)
 
 # Choppy market filter — penalize momentum when ATR is elevated without strong direction
 CHOPPY_FILTER_ENABLED = True

@@ -111,10 +111,13 @@ class MomentumStrategy(BaseStrategy):
                 confidence += 0.10  # Trend continuation -- weaker than actual crossover
                 reason_parts.append("Price below trend EMA")
 
-            # RSI confirmation (symmetric with BUY's 45-70 sweet spot)
-            if 30 < rsi < 55:
+            # RSI confirmation (graduated — deep oversold = exhausted, not confirming)
+            if 40 <= rsi < 55:
                 confidence += 0.15
                 reason_parts.append(f"RSI={rsi:.0f} confirms")
+            elif 30 < rsi < 40:
+                confidence += 0.05
+                reason_parts.append(f"RSI={rsi:.0f} weak confirm")
             elif rsi <= settings.RSI_OVERSOLD:
                 confidence -= 0.20
                 reason_parts.append(f"RSI={rsi:.0f} oversold warning")
