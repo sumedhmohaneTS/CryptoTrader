@@ -120,6 +120,9 @@ class TradingBot:
 
     def _sync_positions_from_exchange(self):
         """Recover existing futures positions from Binance on startup."""
+        # Pre-load open trades from DB so we can restore SL/TP/strategy
+        db_trades = self._load_open_trades_from_db()
+
         positions = self.exchange.get_futures_positions()
         for pos_data in positions:
             # Futures symbols come as "XRP/USDT:USDT", normalize to "XRP/USDT"
@@ -127,16 +130,35 @@ class TradingBot:
             symbol = raw_symbol.split(":")[0] if ":" in raw_symbol else raw_symbol
             if symbol not in self.pairs:
                 continue
+
+            # Try to restore SL/TP/strategy from DB trade record
+            db_trade = db_trades.get(symbol)
+            sl = 0.0
+            tp = 0.0
+            trade_id = 0
+            strategy = "recovered"
+            confidence = 0.0
+            if db_trade and db_trade["side"] == pos_data["side"]:
+                sl = db_trade.get("stop_loss") or 0.0
+                tp = db_trade.get("take_profit") or 0.0
+                trade_id = db_trade.get("id", 0)
+                strategy = db_trade.get("strategy") or "recovered"
+                confidence = db_trade.get("signal_confidence") or 0.0
+                logger.info(
+                    f"Restored DB trade for {symbol}: SL=${sl:.4f} TP=${tp:.4f} "
+                    f"strategy={strategy} (trade #{trade_id})"
+                )
+
             position = Position(
-                trade_id=0,  # unknown, was from a previous run
+                trade_id=trade_id,
                 symbol=symbol,
                 side=pos_data["side"],
                 entry_price=pos_data["entry_price"],
                 quantity=pos_data["contracts"],
-                stop_loss=0.0,  # will be recalculated on next signal
-                take_profit=0.0,
-                strategy="recovered",
-                confidence=0.0,
+                stop_loss=sl,
+                take_profit=tp,
+                strategy=strategy,
+                confidence=confidence,
             )
             self.portfolio.add_position(position)
 
@@ -163,6 +185,29 @@ class TradingBot:
                 f"Recovered position: {pos_data['side']} {pos_data['contracts']:.6f} {symbol} "
                 f"@ ${pos_data['entry_price']:.4f} | uPnL: ${pos_data['unrealized_pnl']:.4f}"
             )
+
+    def _load_open_trades_from_db(self) -> dict:
+        """Load open trades from DB (sync, using sqlite3 directly since aiosqlite
+        requires async but this runs during sync startup)."""
+        import sqlite3
+        result = {}
+        try:
+            conn = sqlite3.connect(self.db.db_path)
+            conn.row_factory = sqlite3.Row
+            rows = conn.execute(
+                "SELECT * FROM trades WHERE status = 'open' ORDER BY id DESC"
+            ).fetchall()
+            for row in rows:
+                d = dict(row)
+                symbol = d.get("symbol", "")
+                if symbol not in result:  # keep most recent per symbol
+                    result[symbol] = d
+            conn.close()
+            if result:
+                logger.info(f"Loaded {len(result)} open trade(s) from DB for recovery")
+        except Exception as e:
+            logger.warning(f"Could not load open trades from DB: {e}")
+        return result
 
     async def stop(self):
         self.running = False
