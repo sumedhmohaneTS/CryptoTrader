@@ -115,21 +115,40 @@ class StrategyManager:
         if signal.signal != Signal.HOLD and signal.strategy == "momentum":
             signal = self._apply_choppy_filter(signal, df)
 
-        # Apply multi-timeframe filter
+        # Apply daily macro trend filter (hard gate — blocks counter-trend)
+        if signal.signal != Signal.HOLD and higher_tf_data:
+            signal = self._apply_daily_trend_filter(signal, higher_tf_data)
+
+        # Apply multi-timeframe filter (1h/4h alignment)
         if signal.signal != Signal.HOLD and higher_tf_data:
             signal = self._apply_mtf_filter(signal, higher_tf_data)
 
-        # Apply funding rate filter
+        # Apply live-only filters (funding/OB/news) with positive boost cap
+        pre_live_conf = signal.confidence
         if signal.signal != Signal.HOLD and funding_rate is not None:
             signal = self._apply_funding_filter(signal, funding_rate)
-
-        # Apply order book imbalance
         if signal.signal != Signal.HOLD and abs(ob_imbalance) > 0.05:
             signal = self._apply_ob_filter(signal, ob_imbalance)
-
-        # Apply news sentiment
         if signal.signal != Signal.HOLD and abs(news_score) > 0.1:
             signal = self._apply_news_filter(signal, news_score)
+
+        # Cap total positive boost from live-only sources
+        live_max_boost = getattr(settings, "LIVE_FILTER_MAX_BOOST", 1.0)
+        if signal.signal != Signal.HOLD:
+            live_boost = signal.confidence - pre_live_conf
+            if live_boost > live_max_boost:
+                capped_conf = pre_live_conf + live_max_boost
+                logger.info(
+                    f"LIVE FILTER CAP: boost {live_boost:+.2f} capped to "
+                    f"+{live_max_boost:.2f} ({signal.confidence:.2f}->{capped_conf:.2f})"
+                )
+                signal = TradeSignal(
+                    signal=signal.signal, confidence=capped_conf,
+                    strategy=signal.strategy, symbol=signal.symbol,
+                    entry_price=signal.entry_price, stop_loss=signal.stop_loss,
+                    take_profit=signal.take_profit,
+                    reason=signal.reason + f"; live boost capped (+{live_max_boost:.2f})",
+                )
 
         # Apply derivatives filter (OI, funding z-score, squeeze, liquidation)
         if signal.signal != Signal.HOLD and derivatives_data and getattr(settings, "DERIVATIVES_ENABLED", False):
@@ -303,11 +322,11 @@ class StrategyManager:
     def _apply_mtf_filter(
         self, signal: TradeSignal, higher_tf_data: dict[str, pd.DataFrame]
     ) -> TradeSignal:
-        """Filter signals against higher timeframe trends."""
+        """Filter signals against higher timeframe trends (1h/4h only — daily handled separately)."""
         htf_trends = {}
         for tf, df in higher_tf_data.items():
-            if tf == settings.PRIMARY_TIMEFRAME:
-                continue
+            if tf == settings.PRIMARY_TIMEFRAME or tf == "1d":
+                continue  # Skip primary and daily (daily has its own filter)
             trend = get_higher_tf_trend(df)
             htf_trends[tf] = trend
 
@@ -391,6 +410,71 @@ class StrategyManager:
                 stop_loss=signal.stop_loss, take_profit=signal.take_profit,
                 reason=reason,
             )
+
+        return signal
+
+    def _apply_daily_trend_filter(
+        self, signal: TradeSignal, higher_tf_data: dict[str, pd.DataFrame]
+    ) -> TradeSignal:
+        """Hard-block counter-trend signals based on daily EMA20/50 cross.
+
+        - Daily EMA20 < EMA50 (bear market): block all BUY signals
+        - Daily EMA20 > EMA50 (bull market): block all SELL signals
+        - Neutral (no clear cross): allow both directions
+        """
+        if not getattr(settings, "DAILY_TREND_FILTER_ENABLED", False):
+            return signal
+
+        daily_df = higher_tf_data.get("1d")
+        if daily_df is None or (hasattr(daily_df, 'empty') and daily_df.empty):
+            return signal
+
+        ema_fast_period = getattr(settings, "DAILY_EMA_FAST", 20)
+        ema_slow_period = getattr(settings, "DAILY_EMA_SLOW", 50)
+
+        if len(daily_df) < ema_slow_period + 5:
+            return signal
+
+        from ta.trend import EMAIndicator
+        ema_fast = EMAIndicator(daily_df["close"], window=ema_fast_period).ema_indicator()
+        ema_slow = EMAIndicator(daily_df["close"], window=ema_slow_period).ema_indicator()
+
+        ema_f = ema_fast.iloc[-1]
+        ema_s = ema_slow.iloc[-1]
+
+        if pd.isna(ema_f) or pd.isna(ema_s):
+            return signal
+
+        if ema_f < ema_s:
+            # Bear market — block BUY
+            daily_trend = "bearish"
+            if signal.signal == Signal.BUY:
+                logger.info(
+                    f"DAILY TREND FILTER: BUY blocked — bear market "
+                    f"(EMA{ema_fast_period}={ema_f:.2f} < EMA{ema_slow_period}={ema_s:.2f})"
+                )
+                return TradeSignal(
+                    signal=Signal.HOLD, confidence=0.0, strategy=signal.strategy,
+                    symbol=signal.symbol, entry_price=signal.entry_price,
+                    stop_loss=0, take_profit=0,
+                    reason=f"Blocked: daily bear market (EMA{ema_fast_period} < EMA{ema_slow_period})",
+                )
+        elif ema_f > ema_s:
+            # Bull market — block SELL
+            daily_trend = "bullish"
+            if signal.signal == Signal.SELL:
+                logger.info(
+                    f"DAILY TREND FILTER: SELL blocked — bull market "
+                    f"(EMA{ema_fast_period}={ema_f:.2f} > EMA{ema_slow_period}={ema_s:.2f})"
+                )
+                return TradeSignal(
+                    signal=Signal.HOLD, confidence=0.0, strategy=signal.strategy,
+                    symbol=signal.symbol, entry_price=signal.entry_price,
+                    stop_loss=0, take_profit=0,
+                    reason=f"Blocked: daily bull market (EMA{ema_fast_period} > EMA{ema_slow_period})",
+                )
+        else:
+            daily_trend = "neutral"
 
         return signal
 

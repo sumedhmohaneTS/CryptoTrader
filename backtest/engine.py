@@ -245,11 +245,21 @@ class BacktestEngine:
 
     def _load_data(self):
         """Download/load all required data."""
+        from datetime import datetime, timedelta
         for symbol in self.symbols:
             print(f"  Loading data for {symbol}...")
             self.data[symbol] = {}
             for tf in settings.TIMEFRAMES:
-                df = self.data_loader.load(symbol, tf, self.start_date, self.end_date)
+                # Daily data needs extra lookback for EMA50 computation
+                # Use download() (not load()) to ensure full date coverage with gap-filling
+                if tf == "1d":
+                    ema_slow = getattr(settings, "DAILY_EMA_SLOW", 50)
+                    lookback_days = ema_slow + 30  # Extra buffer
+                    start_dt = datetime.strptime(self.start_date, "%Y-%m-%d")
+                    extended_start = (start_dt - timedelta(days=lookback_days)).strftime("%Y-%m-%d")
+                    df = self.data_loader.download(symbol, tf, extended_start, self.end_date)
+                else:
+                    df = self.data_loader.load(symbol, tf, self.start_date, self.end_date)
                 if not df.empty:
                     # Pre-compute indicators on the full dataset for primary TF
                     if tf == settings.PRIMARY_TIMEFRAME:

@@ -25,7 +25,7 @@ DEFAULT_PAIRS = [
 ]
 
 # Timeframes (15m primary, 1h/4h filters — best performing config)
-TIMEFRAMES = ["15m", "1h", "4h"]
+TIMEFRAMES = ["15m", "1h", "4h", "1d"]
 PRIMARY_TIMEFRAME = "15m"
 
 # Bot loop
@@ -212,6 +212,14 @@ TRENDING_WEAK_CONFIDENCE_PENALTY = 0.08         # Confidence reduction for weak 
 MTF_STRONG_ADX_THRESHOLD = 25                   # 4h ADX >= 25 = strong trend (full momentum)
 MTF_WEAK_ADX_THRESHOLD = 15                     # 4h ADX < 15 = extra penalty (no more hard downgrade to RANGING)
 MTF_REJECTION_CONFIRMATIONS = 3                 # Consecutive bars below weak threshold before hard downgrade
+
+# Daily macro trend filter — block counter-trend trades in bear/bull markets
+DAILY_TREND_FILTER_ENABLED = True
+DAILY_EMA_FAST = 20                        # 20-day EMA (standard)
+DAILY_EMA_SLOW = 50                        # 50-day EMA (golden/death cross)
+
+# Live-only filter confidence cap (funding/OB/news can't push marginal signals past threshold)
+LIVE_FILTER_MAX_BOOST = 0.05               # Cap total positive confidence from live-only sources
 
 ADAPTIVE_ENABLED = True                     # Master switch for live bot
 ADAPTIVE_LOOKBACK_TRADES = 50              # Rolling window per strategy (larger = smoother)
