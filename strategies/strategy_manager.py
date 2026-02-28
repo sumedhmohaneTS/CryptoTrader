@@ -101,7 +101,11 @@ class StrategyManager:
 
         # Apply TRENDING_WEAK confidence penalty
         if regime == MarketRegime.TRENDING_WEAK and signal.signal != Signal.HOLD:
-            penalty = getattr(settings, "TRENDING_WEAK_CONFIDENCE_PENALTY", 0.08)
+            penalty_cfg = getattr(settings, "TRENDING_WEAK_CONFIDENCE_PENALTY", 0.08)
+            if isinstance(penalty_cfg, dict):
+                penalty = penalty_cfg.get(signal.strategy, 0.08)
+            else:
+                penalty = penalty_cfg  # backward compat with scalar
             new_conf = max(0.0, signal.confidence - penalty)
             logger.info(f"TRENDING_WEAK penalty: -{penalty:.2f} confidence ({signal.confidence:.2f}->{new_conf:.2f})")
             signal = TradeSignal(

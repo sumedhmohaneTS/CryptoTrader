@@ -115,7 +115,7 @@ MIN_SIGNAL_CONFIDENCE = 0.75
 
 # Per-strategy confidence minimums (override MIN_SIGNAL_CONFIDENCE)
 STRATEGY_MIN_CONFIDENCE = {
-    "momentum": 0.72,              # Lowered from 0.78 — raw conf 0.30-0.50 + MTF boost needs room (0.68 was too loose)
+    "momentum": 0.78,              # Raised from 0.72 — 0.70-0.75 conf bucket is net negative in weak OOS windows
     "mean_reversion": 0.55,
     "breakout": 0.70,
 }
@@ -208,7 +208,11 @@ TRAIL_VOL_SCALE = {
 
 # Graduated MTF regime gating (experiment — disabled by default)
 ENABLE_TRENDING_WEAK = True                     # Graduated MTF gating — IS +46%, OOS +207% (enabled Feb 12)
-TRENDING_WEAK_CONFIDENCE_PENALTY = 0.08         # Confidence reduction for weak trends
+TRENDING_WEAK_CONFIDENCE_PENALTY = {             # Per-strategy penalty for weak trends
+    "momentum": 0.15,                             # Momentum struggles in weak trends -- heavy penalty
+    "mean_reversion": 0.04,                        # MR thrives in weak trends -- light penalty
+    "breakout": 0.08,                              # Breakout unchanged
+}
 MTF_STRONG_ADX_THRESHOLD = 25                   # 4h ADX >= 25 = strong trend (full momentum)
 MTF_WEAK_ADX_THRESHOLD = 15                     # 4h ADX < 15 = extra penalty (no more hard downgrade to RANGING)
 MTF_REJECTION_CONFIRMATIONS = 3                 # Consecutive bars below weak threshold before hard downgrade
@@ -225,3 +229,9 @@ ADAPTIVE_ENABLED = True                     # Master switch for live bot
 ADAPTIVE_LOOKBACK_TRADES = 50              # Rolling window per strategy (larger = smoother)
 ADAPTIVE_MIN_TRADES = 8                    # Min trades before adaptation kicks in
 ADAPTIVE_LOG_INTERVAL_BARS = 16            # Log adaptive state every 4 hours
+
+# Momentum WR-based throttle (adaptive sizing penalty when momentum is underperforming)
+MOMENTUM_WR_THROTTLE_ENABLED = True
+MOMENTUM_WR_SOFT_THRESHOLD = 0.58         # WR < 58% -> scale *= 0.50
+MOMENTUM_WR_HARD_THRESHOLD = 0.50         # WR < 50% -> scale *= 0.25
+MOMENTUM_WR_CRITICAL_FLOOR = 0.05         # Allow sizing down to 0.05x (below normal 0.15x floor)

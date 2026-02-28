@@ -20,11 +20,11 @@ class AdaptiveOverrides:
     rr_ratio: dict[str, float] = field(default_factory=dict)           # per-strategy
 
 
-# Default base confidence per strategy (from settings)
+# Default base confidence per strategy (pulled from settings to stay in sync)
 _DEFAULT_CONFIDENCE = {
-    "momentum": 0.78,
-    "mean_reversion": 0.72,
-    "breakout": 0.70,
+    "momentum": settings.STRATEGY_MIN_CONFIDENCE.get("momentum", 0.78),
+    "mean_reversion": settings.STRATEGY_MIN_CONFIDENCE.get("mean_reversion", 0.55),
+    "breakout": settings.STRATEGY_MIN_CONFIDENCE.get("breakout", 0.70),
 }
 
 
@@ -149,7 +149,20 @@ class AdaptiveController:
         elif metrics.recent_trend < -0.6:
             scale *= 0.7
 
-        return max(0.15, min(1.2, scale))
+        # Momentum WR-based throttle — aggressively scale down when momentum underperforms
+        if strategy == "momentum" and getattr(settings, "MOMENTUM_WR_THROTTLE_ENABLED", False):
+            soft = getattr(settings, "MOMENTUM_WR_SOFT_THRESHOLD", 0.58)
+            hard = getattr(settings, "MOMENTUM_WR_HARD_THRESHOLD", 0.50)
+            if metrics.win_rate < hard:
+                scale *= 0.25
+            elif metrics.win_rate < soft:
+                scale *= 0.50
+
+        # Floor: allow momentum to go lower when WR throttle is active
+        floor = 0.15
+        if strategy == "momentum" and getattr(settings, "MOMENTUM_WR_THROTTLE_ENABLED", False):
+            floor = getattr(settings, "MOMENTUM_WR_CRITICAL_FLOOR", 0.05)
+        return max(floor, min(1.2, scale))
 
     def _compute_leverage_scale(self, overall: StrategyMetrics) -> float:
         """
