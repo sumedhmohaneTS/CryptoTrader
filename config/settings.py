@@ -116,7 +116,7 @@ MIN_SIGNAL_CONFIDENCE = 0.75
 # Per-strategy confidence minimums (override MIN_SIGNAL_CONFIDENCE)
 STRATEGY_MIN_CONFIDENCE = {
     "momentum": 0.78,              # Raised from 0.72 — 0.70-0.75 conf bucket is net negative in weak OOS windows
-    "mean_reversion": 0.55,
+    "mean_reversion": 0.55,              # Was 0.55 — require BB + RSI + at least one confirmation
     "breakout": 0.70,
 }
 
@@ -210,7 +210,7 @@ TRAIL_VOL_SCALE = {
 ENABLE_TRENDING_WEAK = True                     # Graduated MTF gating — IS +46%, OOS +207% (enabled Feb 12)
 TRENDING_WEAK_CONFIDENCE_PENALTY = {             # Per-strategy penalty for weak trends
     "momentum": 0.15,                             # Momentum struggles in weak trends -- heavy penalty
-    "mean_reversion": 0.04,                        # MR thrives in weak trends -- light penalty
+    "mean_reversion": 0.04,                        # MR is counter-trend — light penalty (0.12 hurt OOS in T33)
     "breakout": 0.08,                              # Breakout unchanged
 }
 MTF_STRONG_ADX_THRESHOLD = 25                   # 4h ADX >= 25 = strong trend (full momentum)

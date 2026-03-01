@@ -481,14 +481,25 @@ async function loadStrategyLog() {
         return;
     }
     tb.innerHTML = d.map(s => {
-        const sc = s.signal==='BUY'?'badge-buy':s.signal==='SELL'?'badge-sell':'bg-secondary';
+        const ind = typeof s.indicators === 'string' ? JSON.parse(s.indicators || '{}') : (s.indicators || {});
+        const blocked = ind.pre_filter_signal;
+        let sigBadge, confCell;
+        if (blocked) {
+            const bsc = blocked==='BUY'?'badge-buy':blocked==='SELL'?'badge-sell':'bg-secondary';
+            sigBadge = `<span class="badge ${bsc}">${blocked}</span> <span class="badge bg-danger" style="font-size:0.65em">BLOCKED</span>`;
+            confCell = `${(ind.pre_filter_conf*100).toFixed(0)}%`;
+        } else {
+            const sc = s.signal==='BUY'?'badge-buy':s.signal==='SELL'?'badge-sell':'bg-secondary';
+            sigBadge = `<span class="badge ${sc}">${s.signal}</span>`;
+            confCell = `${(s.confidence*100).toFixed(0)}%`;
+        }
         return `<tr>
             <td>${fmtTime(s.timestamp)}</td>
             <td>${s.symbol}</td>
             <td>${s.regime}</td>
             <td>${s.strategy_used}</td>
-            <td><span class="badge ${sc}">${s.signal}</span></td>
-            <td>${(s.confidence*100).toFixed(0)}%</td>
+            <td>${sigBadge}</td>
+            <td>${confCell}</td>
         </tr>`;
     }).join('');
 }

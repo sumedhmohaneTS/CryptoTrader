@@ -76,8 +76,8 @@ class StrategyManager:
         if signal.signal == Signal.HOLD:
             tried = {strategy.name}
             fallback_order = [
-                self.strategies[MarketRegime.TRENDING],       # momentum
-                self.strategies[MarketRegime.RANGING],        # mean_reversion
+                self.strategies[MarketRegime.TRENDING],   # momentum
+                self.strategies[MarketRegime.RANGING],    # mean_reversion
             ]
             best_fallback = None
             for fb_strategy in fallback_order:
@@ -119,6 +119,10 @@ class StrategyManager:
         if signal.signal != Signal.HOLD and signal.strategy == "momentum":
             signal = self._apply_choppy_filter(signal, df)
 
+        # Save pre-filter state for dashboard visibility
+        pre_filter_signal = signal.signal.value if signal.signal != Signal.HOLD else None
+        pre_filter_conf = signal.confidence if signal.signal != Signal.HOLD else None
+
         # Apply daily macro trend filter (hard gate — blocks counter-trend)
         if signal.signal != Signal.HOLD and higher_tf_data:
             signal = self._apply_daily_trend_filter(signal, higher_tf_data)
@@ -126,6 +130,11 @@ class StrategyManager:
         # Apply multi-timeframe filter (1h/4h alignment)
         if signal.signal != Signal.HOLD and higher_tf_data:
             signal = self._apply_mtf_filter(signal, higher_tf_data)
+
+        # Tag blocked signals with pre-filter info for dashboard
+        if pre_filter_signal and signal.signal == Signal.HOLD and pre_filter_conf is not None:
+            signal._pre_filter_signal = pre_filter_signal
+            signal._pre_filter_conf = pre_filter_conf
 
         # Apply live-only filters (funding/OB/news) with positive boost cap
         pre_live_conf = signal.confidence

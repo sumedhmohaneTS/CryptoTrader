@@ -567,13 +567,23 @@ class TradingBot:
                 except Exception:
                     pass  # Non-critical
 
-            # Log strategy decision
+            # Log strategy decision (include pre-filter info if signal was blocked)
+            log_indicators = None
+            pre_sig = getattr(signal, "_pre_filter_signal", None)
+            pre_conf = getattr(signal, "_pre_filter_conf", None)
+            if pre_sig is not None:
+                log_indicators = {
+                    "pre_filter_signal": pre_sig,
+                    "pre_filter_conf": round(pre_conf, 4),
+                    "blocked_by": signal.reason,
+                }
             await self.db.log_strategy(
                 symbol=symbol,
                 regime=regime.value,
                 strategy_used=signal.strategy,
                 signal=signal.signal.value,
                 confidence=signal.confidence,
+                indicators=log_indicators,
             )
 
             # --- Adaptive overrides ---
