@@ -75,10 +75,18 @@ class StrategyManager:
         # (breakout excluded — false breakouts in ranging markets are the #1 loss source)
         if signal.signal == Signal.HOLD:
             tried = {strategy.name}
-            fallback_order = [
-                self.strategies[MarketRegime.TRENDING],   # momentum
-                self.strategies[MarketRegime.RANGING],    # mean_reversion
-            ]
+            # Block MR from fallback in trending regimes — MR is counter-trend,
+            # if momentum says HOLD in a trend, respect that (don't fill gap with MR)
+            if regime in (MarketRegime.TRENDING, MarketRegime.TRENDING_WEAK,
+                          MarketRegime.TRENDING_STRONG):
+                fallback_order = [
+                    self.strategies[MarketRegime.TRENDING],   # momentum only
+                ]
+            else:
+                fallback_order = [
+                    self.strategies[MarketRegime.TRENDING],   # momentum
+                    self.strategies[MarketRegime.RANGING],    # mean_reversion
+                ]
             best_fallback = None
             for fb_strategy in fallback_order:
                 if fb_strategy.name in tried:

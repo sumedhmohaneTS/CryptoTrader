@@ -116,7 +116,7 @@ MIN_SIGNAL_CONFIDENCE = 0.75
 # Per-strategy confidence minimums (override MIN_SIGNAL_CONFIDENCE)
 STRATEGY_MIN_CONFIDENCE = {
     "momentum": 0.72,              # Lowered from 0.78 — raw conf 0.30-0.50 + MTF boost needs room (0.68 was too loose)
-    "mean_reversion": 0.55,              # Was 0.55 — require BB + RSI + at least one confirmation
+    "mean_reversion": 0.62,              # Was 0.55 — require stronger conviction (BB + RSI + reversal candle or volume)
     "breakout": 0.70,
 }
 
