@@ -13,7 +13,7 @@ echo "=== CryptoTrader EC2 Setup ==="
 # 1. System packages
 echo "[1/6] Installing system packages..."
 sudo apt-get update -qq
-sudo apt-get install -y -qq python3.11 python3.11-venv python3-pip git
+sudo apt-get install -y -qq python3-venv python3-pip git
 
 # 2. Ensure NTP is running (fixes clock drift)
 echo "[2/6] Configuring NTP..."
@@ -31,7 +31,7 @@ fi
 
 # 4. Create virtual environment and install deps
 echo "[4/6] Setting up Python environment..."
-python3.11 -m venv "$VENV_DIR"
+python3 -m venv "$VENV_DIR"
 source "$VENV_DIR/bin/activate"
 pip install --upgrade pip -q
 pip install -r "$APP_DIR/requirements.txt" -q
