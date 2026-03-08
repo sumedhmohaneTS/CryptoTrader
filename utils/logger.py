@@ -19,7 +19,12 @@ def setup_logger(name: str = "cryptotrader") -> logging.Logger:
     console.setFormatter(fmt)
     logger.addHandler(console)
 
-    file_handler = logging.FileHandler(settings.LOG_FILE)
+    from logging.handlers import RotatingFileHandler
+    file_handler = RotatingFileHandler(
+        settings.LOG_FILE,
+        maxBytes=100_000_000,  # 100MB per file
+        backupCount=5,
+    )
     file_handler.setFormatter(fmt)
     logger.addHandler(file_handler)
 

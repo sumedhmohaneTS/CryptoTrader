@@ -1,0 +1,25 @@
+[Unit]
+Description=CryptoTrader Automated Trading Bot
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=ubuntu
+WorkingDirectory=/home/ubuntu/CryptoTrader
+Environment="PATH=/home/ubuntu/CryptoTrader/venv/bin:/usr/bin:/bin"
+ExecStart=/home/ubuntu/CryptoTrader/venv/bin/python run_forever.py
+Restart=always
+RestartSec=10
+
+# Graceful shutdown
+TimeoutStopSec=30
+KillSignal=SIGTERM
+
+# Security hardening
+NoNewPrivileges=true
+ProtectSystem=strict
+ReadWritePaths=/home/ubuntu/CryptoTrader
+
+[Install]
+WantedBy=multi-user.target

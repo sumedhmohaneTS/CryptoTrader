@@ -55,20 +55,28 @@ def start_bot() -> dict:
     except FileNotFoundError:
         pass
 
-    # Find pythonw
-    python_dir = os.path.dirname(sys.executable)
-    pythonw = os.path.join(python_dir, "pythonw.exe")
-    if not os.path.exists(pythonw):
-        pythonw = sys.executable  # fallback to python.exe
-
     try:
-        CREATE_NO_WINDOW = 0x08000000
-        DETACHED_PROCESS = 0x00000008
+        popen_kwargs = {
+            "cwd": BOT_DIR,
+            "stdout": subprocess.DEVNULL,
+            "stderr": subprocess.DEVNULL,
+            "close_fds": True,
+        }
+        if sys.platform == "win32":
+            python_dir = os.path.dirname(sys.executable)
+            pythonw = os.path.join(python_dir, "pythonw.exe")
+            if not os.path.exists(pythonw):
+                pythonw = sys.executable
+            CREATE_NO_WINDOW = 0x08000000
+            DETACHED_PROCESS = 0x00000008
+            popen_kwargs["creationflags"] = CREATE_NO_WINDOW | DETACHED_PROCESS
+        else:
+            pythonw = sys.executable
+            popen_kwargs["start_new_session"] = True
+
         proc = subprocess.Popen(
             [pythonw, WATCHDOG_SCRIPT],
-            cwd=BOT_DIR,
-            creationflags=CREATE_NO_WINDOW | DETACHED_PROCESS,
-            close_fds=True,
+            **popen_kwargs,
         )
         # Wait briefly for PID file to appear
         import time
