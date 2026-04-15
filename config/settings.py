@@ -74,8 +74,10 @@ BREAKEVEN_RR = 1.0               # Move stop to breakeven when R:R reaches 1.0 (
 TRAILING_STOP_ATR_MULTIPLIER = 1.5  # Trail at 1.5x ATR behind extreme
 
 # Staircase profit taking — close partial at TP, trail remainder
-STAIRCASE_PROFIT_ENABLED = True     # Close 50% at TP, trail remaining 50%
-STAIRCASE_CLOSE_PCT = 0.50         # Fraction to close at TP
+# T53: Disabled — staircase dropped remainder SL to breakeven, losing 50-90% of unrealized TP
+# on normal retraces. Bench IS +17%→+168% (3.6x avg win). Hybrid trail locks SL at TP instead.
+STAIRCASE_PROFIT_ENABLED = False    # Was True; see T53 analysis
+STAIRCASE_CLOSE_PCT = 0.50         # Unused while staircase disabled
 
 # Dynamic risk controls
 COOLDOWN_BARS = 5                # Wait 5 bars after stop-loss
