@@ -113,7 +113,8 @@ class AdaptiveController:
         """
         Scale position size based on profit factor, streak, and trend.
         This is the PRIMARY adaptation lever — replaces strategy disable.
-        Range: 0.15x to 1.2x (capped from 2.0x to prevent exponential loss spirals)
+        Range: 0.15x to ADAPTIVE_MAX_SIZE_SCALE (default 0.7x, was 1.2x).
+        Lowered from 1.2x: at 25x leverage + 2% min SL, 1.2x = 9% portfolio risk per trade.
         """
         if not has_data:
             return 1.0
@@ -162,7 +163,8 @@ class AdaptiveController:
         floor = 0.15
         if strategy == "momentum" and getattr(settings, "MOMENTUM_WR_THROTTLE_ENABLED", False):
             floor = getattr(settings, "MOMENTUM_WR_CRITICAL_FLOOR", 0.05)
-        return max(floor, min(1.2, scale))
+        ceiling = getattr(settings, "ADAPTIVE_MAX_SIZE_SCALE", 0.7)
+        return max(floor, min(ceiling, scale))
 
     def _compute_leverage_scale(self, overall: StrategyMetrics) -> float:
         """

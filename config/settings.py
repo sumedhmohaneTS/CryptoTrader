@@ -16,12 +16,11 @@ LEVERAGE = 25                    # 25x leverage — targeting 50% return
 MARGIN_TYPE = "ISOLATED"         # ISOLATED — caps loss per position
 
 # Trading pairs (USDT-M futures contracts) — dropped ETH & 1000PEPE (net losers)
-# Added RENDER and LINK (proven profitable via dynamic pair discovery)
+# Dropped RENDER (only pair with negative total P&L: -24.95 across all windows; V4 -43.45 catastrophic)
 DEFAULT_PAIRS = [
     "BTC/USDT", "SOL/USDT", "XRP/USDT",
-    "DOGE/USDT", "AVAX/USDT", "SUI/USDT",
-    "RENDER/USDT",
-    "AXS/USDT", "ZEC/USDT",
+    "DOGE/USDT", "SUI/USDT", "AXS/USDT",
+    "ZEC/USDT", "AVAX/USDT",
 ]
 
 # Timeframes (15m primary, 1h/4h filters — best performing config)
@@ -41,11 +40,13 @@ STRATEGY_SL_ATR_MULTIPLIER = {
     "momentum": 1.5,
     "mean_reversion": 1.2,
     "breakout": 1.5,
+    "scalper": 0.8,
 }
 STRATEGY_REWARD_RISK_RATIO = {
     "momentum": 2.0,
     "mean_reversion": 1.2,
     "breakout": 2.0,
+    "scalper": 1.0,
 }
 MIN_SL_DISTANCE_PCT = 0.020      # Reject signals with SL < 2.0% from entry (1.5% got clipped by noise at 25x)
 
@@ -115,9 +116,10 @@ MIN_SIGNAL_CONFIDENCE = 0.75
 
 # Per-strategy confidence minimums (override MIN_SIGNAL_CONFIDENCE)
 STRATEGY_MIN_CONFIDENCE = {
-    "momentum": 0.72,              # Lowered from 0.78 — raw conf 0.30-0.50 + MTF boost needs room (0.68 was too loose)
+    "momentum": 0.72,              # Lowered from 0.78 — raw conf 0.30-0.50 + MTF boost needs room
     "mean_reversion": 0.62,              # Was 0.55 — require stronger conviction (BB + RSI + reversal candle or volume)
     "breakout": 0.70,
+    "scalper": 0.75,               # High bar — need 3+ confluent signals (RSI extreme + BB + volume + reversal)
 }
 
 # Dynamic pair rotation
@@ -217,6 +219,15 @@ MTF_REJECTION_CONFIRMATIONS = 3                 # Consecutive bars below weak th
 DAILY_TREND_FILTER_ENABLED = True
 DAILY_EMA_FAST = 20                        # 20-day EMA (standard)
 DAILY_EMA_SLOW = 50                        # 50-day EMA (golden/death cross)
+DAILY_COUNTER_TREND_MIN_CONF = 0.80        # Min raw conf to get penalty instead of hard block (T47)
+DAILY_COUNTER_TREND_PENALTY = -0.20        # Conf penalty for high-conviction counter-daily-trend signals (raised from -0.12: only conf>=0.92 passes after penalty)
+
+# Per-pair consecutive loss cooldown (T47) — ban a pair after streak to stop re-entry loops
+PAIR_MAX_CONSECUTIVE_LOSSES = 2            # Ban pair after N consecutive losses
+PAIR_STREAK_COOLDOWN_BARS = 32             # 8h cooldown (32 bars × 15m)
+
+# Momentum minimum volume requirement (T47) — extra penalty in low-volume ranging conditions
+MOMENTUM_MIN_VOLUME_RATIO = 0.7            # Below this AND ADX < 30: extra -0.10 conf penalty
 
 # Live-only filter confidence cap (funding/OB/news can't push marginal signals past threshold)
 LIVE_FILTER_MAX_BOOST = 0.05               # Cap total positive confidence from live-only sources
@@ -225,9 +236,16 @@ ADAPTIVE_ENABLED = True                     # Master switch for live bot
 ADAPTIVE_LOOKBACK_TRADES = 50              # Rolling window per strategy (larger = smoother)
 ADAPTIVE_MIN_TRADES = 8                    # Min trades before adaptation kicks in
 ADAPTIVE_LOG_INTERVAL_BARS = 16            # Log adaptive state every 4 hours
+ADAPTIVE_MAX_SIZE_SCALE = 0.7              # Cap adaptive position scaling at 0.7x (was 1.2x — at 25x leverage + 2% SL, 1.2x = 9% portfolio risk per trade)
 
 # Momentum WR-based throttle (adaptive sizing penalty when momentum is underperforming)
 MOMENTUM_WR_THROTTLE_ENABLED = False       # Disabled — T33 showed OOS regression (+33% vs T30 +60%)
 MOMENTUM_WR_SOFT_THRESHOLD = 0.58         # WR < 58% -> scale *= 0.50
 MOMENTUM_WR_HARD_THRESHOLD = 0.50         # WR < 50% -> scale *= 0.25
 MOMENTUM_WR_CRITICAL_FLOOR = 0.05         # Allow sizing down to 0.05x (below normal 0.15x floor)
+
+# Scalper strategy — high-confidence small deviation capture
+SCALPER_RSI_OVERSOLD = 22                  # Deep oversold (stricter than momentum's 25)
+SCALPER_RSI_OVERBOUGHT = 78               # Deep overbought (stricter than momentum's 75)
+SCALPER_MIN_VOLUME_RATIO = 1.3            # Volume spike threshold for capitulation/exhaustion
+SCALPER_DAILY_TREND_EXEMPT = True         # Bypass daily EMA20/50 filter (scalper trades reversions, not trends)

@@ -709,6 +709,8 @@ class BacktestEngine:
         # Dynamic risk checks: cooldown, frequency, post-profit, clustering
         if self.risk_manager.check_cooldown(symbol, bar_idx):
             return
+        if self.risk_manager.check_pair_streak_cooldown(symbol, bar_idx):
+            return
         if self.risk_manager.check_trade_frequency(bar_idx):
             return
         if self.risk_manager.check_post_profit_cooldown(symbol, bar_idx):
@@ -779,6 +781,21 @@ class BacktestEngine:
                 else:
                     signal.stop_loss = signal.entry_price + new_risk
                     signal.take_profit = signal.entry_price - new_risk * strat_rr
+
+            # Always enforce MIN_SL_DISTANCE_PCT — adaptive path skips validate_signal()
+            min_sl_pct = getattr(settings, "MIN_SL_DISTANCE_PCT", 0.015)
+            sl_dist = abs(signal.entry_price - signal.stop_loss) / signal.entry_price
+            if sl_dist < min_sl_pct:
+                min_sl_dist = signal.entry_price * min_sl_pct
+                strat_rr_adj = getattr(settings, "STRATEGY_REWARD_RISK_RATIO", {}).get(
+                    signal.strategy, settings.REWARD_RISK_RATIO
+                )
+                if signal.signal == Signal.BUY:
+                    signal.stop_loss = signal.entry_price - min_sl_dist
+                    signal.take_profit = signal.entry_price + min_sl_dist * strat_rr_adj
+                else:
+                    signal.stop_loss = signal.entry_price + min_sl_dist
+                    signal.take_profit = signal.entry_price - min_sl_dist * strat_rr_adj
         else:
             if not self.risk_manager.validate_signal(signal):
                 return

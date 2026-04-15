@@ -29,6 +29,8 @@ class MomentumStrategy(BaseStrategy):
         atr = latest.get("atr", 0)
         price = latest["close"]
         volume_ratio = latest.get("volume_ratio", 1.0)
+        adx_col = f"ADX_{settings.ADX_PERIOD}"
+        adx = latest.get(adx_col, 0)
 
         # MACD columns
         macd_hist_col = f"MACDh_{settings.MACD_FAST}_{settings.MACD_SLOW}_{settings.MACD_SIGNAL}"
@@ -84,6 +86,12 @@ class MomentumStrategy(BaseStrategy):
                 confidence -= 0.10
                 reason_parts.append(f"Low volume ({volume_ratio:.1f}x)")
 
+            # Extra penalty: very low volume in ranging conditions (T47)
+            min_vol = getattr(settings, "MOMENTUM_MIN_VOLUME_RATIO", 0.7)
+            if volume_ratio < min_vol and adx < 30:
+                confidence -= 0.10
+                reason_parts.append(f"Weak volume+ranging penalty ({volume_ratio:.1f}x, ADX={adx:.0f})")
+
             # OBV confirms buying pressure
             if obv > obv_ema:
                 confidence += 0.10
@@ -119,6 +127,7 @@ class MomentumStrategy(BaseStrategy):
                 confidence += 0.10
                 reason_parts.append(f"RSI={rsi:.0f} strong downtrend")
 
+
             if macd_hist < 0 and macd_hist < prev_macd_hist:
                 confidence += 0.15
                 reason_parts.append("MACD histogram falling")
@@ -132,6 +141,12 @@ class MomentumStrategy(BaseStrategy):
             elif volume_ratio < 0.8:
                 confidence -= 0.10
                 reason_parts.append(f"Low volume ({volume_ratio:.1f}x)")
+
+            # Extra penalty: very low volume in ranging conditions (T47)
+            min_vol = getattr(settings, "MOMENTUM_MIN_VOLUME_RATIO", 0.7)
+            if volume_ratio < min_vol and adx < 30:
+                confidence -= 0.10
+                reason_parts.append(f"Weak volume+ranging penalty ({volume_ratio:.1f}x, ADX={adx:.0f})")
 
             if obv < obv_ema:
                 confidence += 0.10
