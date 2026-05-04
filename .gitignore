@@ -21,8 +21,28 @@ data/trades.db-shm
 data/bot.pid
 data/bot.stop
 
-# Logs
+# Logs (incl. rotated/archived backups)
 *.log
+*.log.*
+
+# Ad-hoc diagnostic / reconciliation scripts (created in repo root for one-off use)
+/analyze_trades.py
+/perf_analysis*.py
+/reconcile_*.py
+/dashboard_validate.py
+
+# One-off DB pulls / dumps
+data/ec2_pull/
+data/trading.db
+
+# Backtest experiment artifacts (one-off T-numbered runs)
+scripts/__pycache__/
+scripts/run_t*.py
+scripts/run_wf_t*.py
+scripts/t*_results.txt
+scripts/t*_output.txt
+scripts/t*_full_wf.txt
+scripts/t*_fixed_output.txt
 
 # Historical data & backtest output
 data/historical/
