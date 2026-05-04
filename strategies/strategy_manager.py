@@ -6,6 +6,7 @@ from strategies.base import TradeSignal, Signal
 from strategies.momentum import MomentumStrategy
 from strategies.mean_reversion import MeanReversionStrategy
 from strategies.breakout import BreakoutStrategy
+from strategies.scalper import ScalperStrategy
 from config import settings
 from utils.logger import setup_logger
 
@@ -75,17 +76,18 @@ class StrategyManager:
         # (breakout excluded — false breakouts in ranging markets are the #1 loss source)
         if signal.signal == Signal.HOLD:
             tried = {strategy.name}
-            # Block MR from fallback in trending regimes — MR is counter-trend,
-            # if momentum says HOLD in a trend, respect that (don't fill gap with MR)
-            if regime in (MarketRegime.TRENDING, MarketRegime.TRENDING_WEAK,
-                          MarketRegime.TRENDING_STRONG):
+            scalper = ScalperStrategy()
+            # Block MR from fallback in trending regimes — MR is counter-trend
+            if regime in (MarketRegime.TRENDING, MarketRegime.TRENDING_WEAK, MarketRegime.TRENDING_STRONG):
                 fallback_order = [
                     self.strategies[MarketRegime.TRENDING],   # momentum only
+                    scalper,                                   # scalper last — regime-agnostic
                 ]
             else:
                 fallback_order = [
                     self.strategies[MarketRegime.TRENDING],   # momentum
                     self.strategies[MarketRegime.RANGING],    # mean_reversion
+                    scalper,                                   # scalper last — regime-agnostic
                 ]
             best_fallback = None
             for fb_strategy in fallback_order:
@@ -132,11 +134,14 @@ class StrategyManager:
         pre_filter_conf = signal.confidence if signal.signal != Signal.HOLD else None
 
         # Apply daily macro trend filter (hard gate — blocks counter-trend)
-        if signal.signal != Signal.HOLD and higher_tf_data:
+        # Scalper exempt: it trades reversions, not trends
+        scalper_exempt = signal.strategy == "scalper" and getattr(settings, "SCALPER_DAILY_TREND_EXEMPT", False)
+        if signal.signal != Signal.HOLD and higher_tf_data and not scalper_exempt:
             signal = self._apply_daily_trend_filter(signal, higher_tf_data)
 
         # Apply multi-timeframe filter (1h/4h alignment)
-        if signal.signal != Signal.HOLD and higher_tf_data:
+        # Scalper exempt: regime-agnostic, doesn't need MTF trend alignment
+        if signal.signal != Signal.HOLD and higher_tf_data and not scalper_exempt:
             signal = self._apply_mtf_filter(signal, higher_tf_data)
 
         # Tag blocked signals with pre-filter info for dashboard
@@ -466,38 +471,88 @@ class StrategyManager:
         if pd.isna(ema_f) or pd.isna(ema_s):
             return signal
 
+        min_conf = getattr(settings, "DAILY_COUNTER_TREND_MIN_CONF", 0.80)
+        penalty = getattr(settings, "DAILY_COUNTER_TREND_PENALTY", -0.12)
+
         if ema_f < ema_s:
-            # Bear market — block BUY
+            # Bear market — block low-conf BUYs, penalize high-conf BUYs
             daily_trend = "bearish"
             if signal.signal == Signal.BUY:
-                logger.info(
-                    f"DAILY TREND FILTER: BUY blocked — bear market "
-                    f"(EMA{ema_fast_period}={ema_f:.2f} < EMA{ema_slow_period}={ema_s:.2f})"
-                )
-                return TradeSignal(
-                    signal=Signal.HOLD, confidence=0.0, strategy=signal.strategy,
-                    symbol=signal.symbol, entry_price=signal.entry_price,
-                    stop_loss=0, take_profit=0,
-                    reason=f"Blocked: daily bear market (EMA{ema_fast_period} < EMA{ema_slow_period})",
-                )
+                if signal.confidence < min_conf:
+                    logger.info(
+                        f"DAILY TREND FILTER: BUY blocked — bear market, conf {signal.confidence:.2f} < {min_conf} "
+                        f"(EMA{ema_fast_period}={ema_f:.2f} < EMA{ema_slow_period}={ema_s:.2f})"
+                    )
+                    return TradeSignal(
+                        signal=Signal.HOLD, confidence=0.0, strategy=signal.strategy,
+                        symbol=signal.symbol, entry_price=signal.entry_price,
+                        stop_loss=0, take_profit=0,
+                        reason=f"Blocked: daily bear market (EMA{ema_fast_period} < EMA{ema_slow_period})",
+                    )
+                else:
+                    new_conf = max(0.0, signal.confidence + penalty)
+                    logger.info(
+                        f"DAILY TREND FILTER: counter-trend penalty {penalty:.2f} "
+                        f"(conf {signal.confidence:.2f} -> {new_conf:.2f}, bear market)"
+                    )
+                    signal = TradeSignal(
+                        signal=signal.signal, confidence=new_conf, strategy=signal.strategy,
+                        symbol=signal.symbol, entry_price=signal.entry_price,
+                        stop_loss=signal.stop_loss, take_profit=signal.take_profit,
+                        reason=signal.reason + f"; daily counter-trend penalty ({penalty:.2f})",
+                    )
         elif ema_f > ema_s:
-            # Bull market — block SELL
+            # Bull market — block low-conf SELLs, penalize high-conf SELLs
             daily_trend = "bullish"
             if signal.signal == Signal.SELL:
-                logger.info(
-                    f"DAILY TREND FILTER: SELL blocked — bull market "
-                    f"(EMA{ema_fast_period}={ema_f:.2f} > EMA{ema_slow_period}={ema_s:.2f})"
-                )
-                return TradeSignal(
-                    signal=Signal.HOLD, confidence=0.0, strategy=signal.strategy,
-                    symbol=signal.symbol, entry_price=signal.entry_price,
-                    stop_loss=0, take_profit=0,
-                    reason=f"Blocked: daily bull market (EMA{ema_fast_period} > EMA{ema_slow_period})",
-                )
+                if signal.confidence < min_conf:
+                    logger.info(
+                        f"DAILY TREND FILTER: SELL blocked — bull market, conf {signal.confidence:.2f} < {min_conf} "
+                        f"(EMA{ema_fast_period}={ema_f:.2f} > EMA{ema_slow_period}={ema_s:.2f})"
+                    )
+                    return TradeSignal(
+                        signal=Signal.HOLD, confidence=0.0, strategy=signal.strategy,
+                        symbol=signal.symbol, entry_price=signal.entry_price,
+                        stop_loss=0, take_profit=0,
+                        reason=f"Blocked: daily bull market (EMA{ema_fast_period} > EMA{ema_slow_period})",
+                    )
+                else:
+                    new_conf = max(0.0, signal.confidence + penalty)
+                    logger.info(
+                        f"DAILY TREND FILTER: counter-trend penalty {penalty:.2f} "
+                        f"(conf {signal.confidence:.2f} -> {new_conf:.2f}, bull market)"
+                    )
+                    signal = TradeSignal(
+                        signal=signal.signal, confidence=new_conf, strategy=signal.strategy,
+                        symbol=signal.symbol, entry_price=signal.entry_price,
+                        stop_loss=signal.stop_loss, take_profit=signal.take_profit,
+                        reason=signal.reason + f"; daily counter-trend penalty ({penalty:.2f})",
+                    )
         else:
             daily_trend = "neutral"
 
         return signal
+
+    def _get_daily_trend(self, higher_tf_data: dict[str, pd.DataFrame]) -> str:
+        """Return 'bearish', 'bullish', or 'neutral' based on daily EMA20/50."""
+        daily_df = higher_tf_data.get("1d")
+        if daily_df is None or (hasattr(daily_df, 'empty') and daily_df.empty):
+            return "neutral"
+        ema_fast_period = getattr(settings, "DAILY_EMA_FAST", 20)
+        ema_slow_period = getattr(settings, "DAILY_EMA_SLOW", 50)
+        if len(daily_df) < ema_slow_period + 5:
+            return "neutral"
+        from ta.trend import EMAIndicator
+        ema_fast = EMAIndicator(daily_df["close"], window=ema_fast_period).ema_indicator()
+        ema_slow = EMAIndicator(daily_df["close"], window=ema_slow_period).ema_indicator()
+        ema_f, ema_s = ema_fast.iloc[-1], ema_slow.iloc[-1]
+        if pd.isna(ema_f) or pd.isna(ema_s):
+            return "neutral"
+        if ema_f < ema_s:
+            return "bearish"
+        elif ema_f > ema_s:
+            return "bullish"
+        return "neutral"
 
     def _apply_funding_filter(self, signal: TradeSignal, funding_rate: float) -> TradeSignal:
         """

@@ -19,6 +19,10 @@ class RiskManager:
         self._hour_start_bar: int = 0
         self._trades_today: int = 0
 
+        # Per-pair consecutive loss streak tracking (T47)
+        self._pair_consecutive_losses: dict[str, int] = {}
+        self._pair_last_sl_bar: dict[str, int] = {}
+
         # Overtrading guards
         self._last_win_bar: dict[str, int] = {}         # symbol -> bar index of last win
         self._entries_this_tick: int = 0
@@ -38,9 +42,13 @@ class RiskManager:
         """Record that a stop-loss was hit for cooldown tracking."""
         self._last_stop_loss_bar[symbol] = bar_index
         self._consecutive_losses += 1
+        # Per-pair streak tracking (T47)
+        self._pair_consecutive_losses[symbol] = self._pair_consecutive_losses.get(symbol, 0) + 1
+        self._pair_last_sl_bar[symbol] = bar_index
         logger.info(
             f"Stop-loss registered for {symbol} at bar {bar_index} "
-            f"(consecutive losses: {self._consecutive_losses})"
+            f"(consecutive losses: {self._consecutive_losses}, "
+            f"pair streak: {self._pair_consecutive_losses[symbol]})"
         )
 
     def register_win(self, symbol: str = "", bar_index: int = 0):
@@ -48,6 +56,7 @@ class RiskManager:
         self._consecutive_losses = 0
         if symbol:
             self._last_win_bar[symbol] = bar_index
+            self._pair_consecutive_losses[symbol] = 0
 
     def check_cooldown(self, symbol: str, bar_index: int) -> bool:
         """Return True if the symbol is still in cooldown after a stop-loss."""
@@ -64,6 +73,25 @@ class RiskManager:
         if bars_since < cooldown:
             logger.info(
                 f"{symbol} in cooldown: {bars_since}/{cooldown} bars since stop-loss"
+            )
+            return True
+        return False
+
+    def check_pair_streak_cooldown(self, symbol: str, bar_index: int) -> bool:
+        """Return True if pair is banned due to consecutive loss streak (T47)."""
+        max_losses = getattr(settings, "PAIR_MAX_CONSECUTIVE_LOSSES", 2)
+        cooldown = getattr(settings, "PAIR_STREAK_COOLDOWN_BARS", 32)
+        streak = self._pair_consecutive_losses.get(symbol, 0)
+        if streak < max_losses:
+            return False
+        last_sl = self._pair_last_sl_bar.get(symbol)
+        if last_sl is None:
+            return False
+        bars_since = bar_index - last_sl
+        if bars_since < cooldown:
+            logger.info(
+                f"{symbol} pair streak cooldown: {streak} consecutive losses, "
+                f"{bars_since}/{cooldown} bars since last SL"
             )
             return True
         return False

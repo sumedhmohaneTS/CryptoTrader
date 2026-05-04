@@ -503,6 +503,8 @@ class TradingBot:
             # Dynamic risk checks: cooldown, frequency, post-profit, clustering
             if self.risk_manager.check_cooldown(symbol, self._tick_counter):
                 return
+            if self.risk_manager.check_pair_streak_cooldown(symbol, self._tick_counter):
+                return
             if self.risk_manager.check_trade_frequency(self._tick_counter):
                 return
             if self.risk_manager.check_post_profit_cooldown(symbol, self._tick_counter):
