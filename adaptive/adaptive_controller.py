@@ -129,11 +129,11 @@ class AdaptiveController:
             pf_excess = (metrics.profit_factor - 1.0) / 0.5
             scale = 1.0 + 0.2 * pf_excess
         elif metrics.profit_factor > 0.5:
-            # PF 0.5->0.3x, PF 1.0->1.0x
+            # T55: PF 0.5->0.5x, PF 1.0->1.0x (was 0.3x->1.0x)
             pf_pos = (metrics.profit_factor - 0.5) / 0.5
-            scale = 0.3 + 0.7 * pf_pos
+            scale = 0.5 + 0.5 * pf_pos
         else:
-            scale = 0.25
+            scale = 0.50  # T55: PF<0.5 floor 0.25 -> 0.50
 
         # Losing streak penalty: 4+ consecutive losses -> halve
         if metrics.current_streak <= -4:
@@ -160,7 +160,7 @@ class AdaptiveController:
                 scale *= 0.50
 
         # Floor: allow momentum to go lower when WR throttle is active
-        floor = 0.15
+        floor = 0.30  # T55: was 0.15
         if strategy == "momentum" and getattr(settings, "MOMENTUM_WR_THROTTLE_ENABLED", False):
             floor = getattr(settings, "MOMENTUM_WR_CRITICAL_FLOOR", 0.05)
         ceiling = getattr(settings, "ADAPTIVE_MAX_SIZE_SCALE", 0.7)

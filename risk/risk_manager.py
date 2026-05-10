@@ -262,7 +262,7 @@ class RiskManager:
         drawdown = self._get_current_drawdown(portfolio_value)
         if drawdown > 0.10:
             # Linear reduction: at 10% DD -> 100%, at 20% DD -> 25%
-            dd_scale = max(0.25, 1.0 - (drawdown - 0.10) * 7.5)
+            dd_scale = max(0.50, 1.0 - (drawdown - 0.10) * 5.0)  # T55: floor 0.25->0.50, slope 7.5->5.0
             max_margin *= dd_scale
             logger.info(f"Drawdown sizing: {drawdown:.1%} DD, scale={dd_scale:.2f}")
 
