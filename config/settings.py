@@ -18,9 +18,10 @@ MARGIN_TYPE = "ISOLATED"         # ISOLATED — caps loss per position
 # Trading pairs (USDT-M futures contracts) — dropped ETH & 1000PEPE (net losers)
 # Dropped RENDER (only pair with negative total P&L: -24.95 across all windows; V4 -43.45 catastrophic)
 DEFAULT_PAIRS = [
-    "BTC/USDT", "SOL/USDT", "XRP/USDT",
-    "DOGE/USDT", "SUI/USDT", "AXS/USDT",
-    "ZEC/USDT", "AVAX/USDT",
+    # T55 (May 8): Drop BTC (0/3 lifetime WR + 1 ghost loss), ZEC (flaky), AVAX (-$22, 9% WR).
+    # RENDER already absent (-$32, 9% WR). 5 pairs concentrated on lifetime winners.
+    "SOL/USDT", "XRP/USDT", "DOGE/USDT",
+    "SUI/USDT", "AXS/USDT",
 ]
 
 # Timeframes (15m primary, 1h/4h filters — best performing config)
@@ -119,7 +120,7 @@ MIN_SIGNAL_CONFIDENCE = 0.75
 # Per-strategy confidence minimums (override MIN_SIGNAL_CONFIDENCE)
 STRATEGY_MIN_CONFIDENCE = {
     "momentum": 0.72,              # Lowered from 0.78 — raw conf 0.30-0.50 + MTF boost needs room
-    "mean_reversion": 0.62,              # Was 0.55 — require stronger conviction (BB + RSI + reversal candle or volume)
+    "mean_reversion": 0.99,              # T55 (May 8): effectively disabled — 24% WR / -$17 lifetime
     "breakout": 0.70,
     "scalper": 0.75,               # High bar — need 3+ confluent signals (RSI extreme + BB + volume + reversal)
 }
