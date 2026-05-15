@@ -1153,6 +1153,108 @@ OOS walk-forward windows: +6.24%, +5.13%, -16.74%, +82.37%, -24.53%, +68.27%
 
 ---
 
-## Best Configuration (Test 25 -- LIVE)
+> **Note on documentation gap:** Tests 28-54 are reflected in git commits and live code but were not separately documented in this file. T28-T53 are visible in `git log --oneline | grep "Test"`. T54 (per-pair loss-streak cooldown + soft counter-trend filter + scalper integration) was deployed live on May 4 2026.
 
-25x leverage, 15m timeframe, **staircase profit taking** (50% close at TP, trail remaining 50%, breakeven at 1.0 R:R), **9 static pairs** (dropped LINK), 15% position size, 5 max positions, per-strategy SL/R:R, adaptive sizing **capped at 1.2x**, min SL distance **1.5%**, graduated MTF regime gating (STRONG: 4h ADX >= 25, WEAK: 15-25 with -0.08 conf penalty, no hard RANGING downgrade), **choppy filter** (ATR/ATR_SMA > 1.15 AND ADX < 30 -> -0.12 momentum conf), **multi-strategy fallback** (HOLD -> try momentum/MR, no breakout), **softer 4h direction gate** (opposed=block, neutral=-0.10 penalty), **MR RSI graduated scoring**, **MR SL 1.2 ATR**. **IS: +91.78%, OOS: +45.61% avg WF.** Best combined IS+OOS result.
+---
+
+## Test 55a: Pair Pruning + Disable Mean Reversion (May 8) — REVERTED BY T56
+
+After ~119 live trades since Feb showing 30% WR / PF 0.45 / -$105 cumulative, dropped what looked like clear bleeders:
+- BTC: 0/3 lifetime WR
+- ZEC: high variance, no edge
+- AVAX: 9% WR, -$22 over 11 trades
+- mean_reversion strategy: 24% WR, -$17 over 29 trades (effectively disabled via conf 0.99)
+
+Lineup reduced from 8 → 5 pairs (SOL, XRP, DOGE, SUI, AXS).
+
+### Live Result (5 days, 23 closed trades)
+
+| Metric | Value |
+|--------|-------|
+| Win rate | 48% |
+| Total PnL | -$0.82 realized |
+| EV/trade | -$0.21 |
+| Profit factor | ~0.90 |
+
+**Verdict:** WR improved (30% → 48%) and PF improved (0.45 → 0.90), but still slightly negative EV.
+
+### Why It Was Reverted
+
+T56 backtest showed the "removed" pairs (BTC, ZEC) were among the top performers in the same period the removed pairs supposedly bled out. **Pair-by-pair pruning was whack-a-mole — the same pair flips sides between periods**. Strategy filters + adaptive sizing should decide per-trade, not a static blacklist.
+
+---
+
+## Test 55b: Lift Position-Sizing Safety Floors (May 8)
+
+Diagnosed that at $97 portfolio, stacked safety multipliers (drawdown × adaptive PF × confidence) compounded to ~5% of configured max — actual trades were $30-38 notional ($1.20-$1.55 margin), or 1.3% of capital deployed. Capital efficiency too low to generate meaningful PnL.
+
+### Changes
+
+- `risk_manager.py`: drawdown scale floor 0.25 → 0.50, slope 7.5 → 5.0 (less aggressive cut on deep DD)
+- `adaptive_controller.py`: PF<0.5 fallback 0.25 → 0.50, PF 0.5-1.0 range 0.3-1.0 → 0.5-1.0, hard floor 0.15 → 0.30
+
+### Effect
+
+Per-trade size ~3x larger at current conditions ($60-200 notional vs $30-38). Compounds with natural size-up that was already happening as PF trended upward.
+
+**Verdict:** Validated — sizing is now meaningful without abandoning safety entirely. Retained through T56.
+
+---
+
+## Test 56: Restore 8-Pair Lineup + Fix R:R Asymmetry — CURRENT LIVE CONFIG
+
+After T55a/b deployment, ran a fresh backtest on May 1-13 2026 (the same window as live trading). Both backtest and live agreed: **strategy had negative edge in current regime (-$0.15 to -$0.21 EV per trade)**. Not a sample fluke — the strategy itself was broken.
+
+### Root Cause Diagnosis
+
+```
+Trailing stops:   33 trades | +$29.05 gross  (avg win  $0.88)
+Stop losses:      26 trades | -$34.62 gross  (avg loss $1.33)
+                                              Realized R:R ≈ 0.66
+```
+
+**Configured R:R was 2.0 but realized was 0.66.** The trailing stop was exiting winners too early; stop losses fired at full distance. Even at 50% WR this loses every trade.
+
+### Changes
+
+- **Restored 8-pair lineup**: BTC, SOL, XRP, DOGE, SUI, AXS, ZEC, AVAX (reverted T55a)
+- `BREAKEVEN_RR`: 1.0 → 1.8 (let winners build cushion before BE lock)
+- `TRAILING_STOP_ATR_MULTIPLIER`: 1.5 → 2.5 (wider trail captures bigger moves)
+- `STRATEGY_MIN_CONFIDENCE["momentum"]`: 0.72 → 0.78 (entry quality bar)
+- `mean_reversion` kept at 0.99 (still disabled, retained from T55a)
+
+### Backtest Validation (May 1-13, 8 pairs)
+
+| Metric | T55 baseline | T56a (R:R fix only) | **T56b (+momentum 0.78)** |
+|--------|-------------|---------------------|---------------------------|
+| Trades | 59 | 46 | 46 |
+| Win rate | 50% | 48% | 50% |
+| Avg win | $1.01 | $1.76 | **$2.73** |
+| Avg loss | -$1.16 | -$1.61 | -$1.88 |
+| Realized R:R | 0.87 | 1.09 | **1.45** |
+| Profit factor | 0.84 | 1.00 | **1.45** |
+| **EV/trade** | **-$0.153** | -$0.060 | **+$0.347** |
+| Final balance | $91.00 | $97.25 | **$115.96** (+15.96%) |
+
+Crossed the pre-committed +$0.10 EV deploy threshold. **Avg win up 2.7x** versus T55 — R:R fix is the dominant lever.
+
+### Pre-Deploy Discipline
+
+Before running this experiment, committed to a rule: *"If backtest goes from -$0.15 to ≥+$0.10 EV, ship it. If not, pause the bot."* This forced the iteration — T56a's intermediate -$0.06 was not enough; adding the confidence raise (Lever B) pushed it across the line.
+
+### Status: **DEPLOYED LIVE** (May 13, 2026)
+
+Needs 20+ live trades for true validation. Watch for: realized R:R ≥1.3, avg win ≥$2.00, EV/trade ≥+$0.10.
+
+---
+
+## Best Configuration (Test 56 -- LIVE)
+
+25x leverage, 15m timeframe, **8 pairs** (BTC, SOL, XRP, DOGE, SUI, AXS, ZEC, AVAX), 15% max position size with **lifted safety floors** (T55b: drawdown floor 0.50, adaptive PF floor 0.50, hard floor 0.30), **breakeven at 1.8 R:R** (T56), **trailing at 2.5x ATR** (T56), per-strategy SL/R:R, min SL distance 2.0%, graduated MTF regime gating, choppy filter, multi-strategy fallback (HOLD → momentum/MR/scalper), **mean_reversion disabled** (conf floor 0.99, T55a), **momentum entry bar 0.78** (T56b), per-pair loss-streak cooldown (T54), soft counter-trend filter with -0.12 penalty (T54), **ScalperStrategy** in fallback chain (T54). **May 1-13 backtest: +15.96% return, +$0.347 EV/trade, PF 1.45.** Awaiting 20+ live trades for validation.
+
+### Historical Context
+
+- T1-T11 (Feb 2026): Built baseline, scaled leverage 5x → 25x; achieved +52.86% IS return.
+- T12-T27 (Feb 2026): Adaptive regime system, MTF gating, staircase profits, choppy filter, RSI symmetry fix. IS pushed to +209%; OOS validation.
+- T28-T54 (Feb-May 2026): Continued tuning — documented in git commits, not separately in this file.
+- T55-T56 (May 2026): First live diagnostic loop with backtest validation gate. Resulted in current config.

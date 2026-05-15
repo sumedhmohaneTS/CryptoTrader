@@ -6,7 +6,7 @@ A simple guide to the CryptoTrader decision flow.
 
 ## 1. Every 60 Seconds
 
-The bot loops through each of the 10 trading pairs. For each pair it:
+The bot loops through each of the 8 trading pairs (BTC, SOL, XRP, DOGE, SUI, AXS, ZEC, AVAX). For each pair it:
 
 1. Fetches the latest 15m candle + 1h/4h candles for multi-timeframe filtering
 2. Computes indicators (EMA, RSI, MACD, Bollinger Bands, ATR, ADX, OBV, S/R levels)
@@ -25,8 +25,10 @@ The regime decides which strategy runs:
 |--------|-----------|----------|
 | **Trending (strong)** | ADX > 25 AND 4h ADX >= 25 | Momentum (full confidence) |
 | **Trending (weak)** | ADX > 25 AND 4h ADX 18-25 | Momentum (-0.08 conf penalty) |
-| **Ranging** | ADX < 20 AND 4h ADX < 18 (3-bar confirm) | Mean Reversion |
+| **Ranging** | ADX < 20 AND 4h ADX < 18 (3-bar confirm) | Mean Reversion (disabled May 8 via 0.99 conf floor — falls back to momentum / scalper) |
 | **Volatile** | ATR > 1.5x its SMA | Breakout |
+
+Since T54 (May 4) a 4th strategy, **Scalper** (regime-agnostic, exempt from daily/MTF filters), participates in the multi-strategy fallback chain when the primary HOLD.
 
 ---
 

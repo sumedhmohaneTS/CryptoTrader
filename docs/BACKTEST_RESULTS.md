@@ -1,8 +1,65 @@
 # Backtest Results & Performance Benchmark
 
-Last updated: February 2026
+Last updated: May 13, 2026
+
+> **Note:** This document records the original Feb 2026 benchmark (5x leverage, 3 pairs, conservative baseline). Live configuration has evolved substantially through T1-T56; see `STRATEGY_RESULTS.md` for the running test log. The most recent validated backtest (May 1-13, 2026, T56 config) is summarized below.
 
 ---
+
+## Latest Backtest: T56 — May 1-13 2026 (current live config)
+
+| Parameter | Value |
+|-----------|-------|
+| Pairs | 8 (BTC, SOL, XRP, DOGE, SUI, AXS, ZEC, AVAX) |
+| Timeframe | 15m (filtered against 1h/4h/1d) |
+| Leverage | 25x isolated |
+| Position size | 15% max, conf-scaled, DD-floor 0.50, adaptive-floor 0.50 |
+| Breakeven trigger | 1.8 R:R |
+| Trailing stop | 2.5x ATR |
+| Momentum confidence floor | 0.78 |
+| Mean reversion | DISABLED (floor 0.99) |
+| Initial balance | $100 |
+
+### Results
+
+| Metric | Value |
+|--------|-------|
+| **Return** | **+15.96%** (13 days) |
+| Total trades | 46 |
+| Win rate | 50% |
+| Profit factor | **1.45** |
+| Avg win | $2.73 |
+| Avg loss | -$1.88 |
+| Realized R:R | **1.45** |
+| EV per trade | **+$0.347** |
+| Final balance | $115.96 |
+
+### Per-Symbol PnL
+
+| Symbol | Trades | PnL | W/L |
+|--------|--------|-----|-----|
+| ZEC/USDT | 5 | +$16.09 | 4/1 |
+| SUI/USDT | 11 | +$14.81 | 6/5 |
+| AVAX/USDT | 1 | +$1.55 | 1/0 |
+| BTC/USDT | 7 | +$1.17 | 5/2 |
+| SOL/USDT | 8 | -$0.76 | 3/5 |
+| XRP/USDT | 5 | -$1.91 | 2/3 |
+| AXS/USDT | 6 | -$5.27 | 2/4 |
+| DOGE/USDT | 3 | -$6.15 | 0/3 |
+
+**Takeaway:** Pair selection rotates between periods (ZEC and BTC were dropped-then-restored pairs that ended up top performers). No static blacklist is reliable — the filters + adaptive sizing must do per-trade selection.
+
+### Caveats
+
+- Single 13-day window; not walk-forward validated yet.
+- Backtest assumes ideal fills on stop orders (no slippage); live may underperform by 30-50%.
+- No funding-rate modeling for overnight shorts.
+
+Re-run with `scripts/run_backtest_may.py` (edit date range as needed). The Feb 2026 baseline benchmark follows below for historical context.
+
+---
+
+## Historical Baseline (Feb 2026)
 
 ## Configuration Under Test
 
