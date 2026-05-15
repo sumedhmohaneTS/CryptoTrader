@@ -18,10 +18,10 @@ MARGIN_TYPE = "ISOLATED"         # ISOLATED — caps loss per position
 # Trading pairs (USDT-M futures contracts) — dropped ETH & 1000PEPE (net losers)
 # Dropped RENDER (only pair with negative total P&L: -24.95 across all windows; V4 -43.45 catastrophic)
 DEFAULT_PAIRS = [
-    # T55 (May 8): Drop BTC (0/3 lifetime WR + 1 ghost loss), ZEC (flaky), AVAX (-$22, 9% WR).
-    # RENDER already absent (-$32, 9% WR). 5 pairs concentrated on lifetime winners.
-    "SOL/USDT", "XRP/USDT", "DOGE/USDT",
-    "SUI/USDT", "AXS/USDT",
+    # T56 (May 13): Restore full 8-pair lineup. Pair blacklisting was whack-a-mole;
+    # strategy filters + adaptive sizing should decide per-trade. Run backtest to validate.
+    "BTC/USDT", "SOL/USDT", "XRP/USDT", "DOGE/USDT",
+    "SUI/USDT", "AXS/USDT", "ZEC/USDT", "AVAX/USDT",
 ]
 
 # Timeframes (15m primary, 1h/4h filters — best performing config)
@@ -71,8 +71,8 @@ MAX_OPEN_POSITIONS = 5           # Allow 5 concurrent positions
 # Trailing stop system (hybrid — fixed TP activates trailing, best in Test 2)
 TRAILING_STOP_ENABLED = True     # Enable trailing stops
 TRAILING_HYBRID = True           # True = hit fixed TP first, then trail for more
-BREAKEVEN_RR = 1.0               # Move stop to breakeven when R:R reaches 1.0 (lock profits sooner)
-TRAILING_STOP_ATR_MULTIPLIER = 1.5  # Trail at 1.5x ATR behind extreme
+BREAKEVEN_RR = 1.8               # T56: was 1.0 — let winners build cushion before BE lock
+TRAILING_STOP_ATR_MULTIPLIER = 2.5  # T56: was 1.5 — wider trail captures bigger moves
 
 # Staircase profit taking — close partial at TP, trail remainder
 # T53: Disabled — staircase dropped remainder SL to breakeven, losing 50-90% of unrealized TP
@@ -119,7 +119,7 @@ MIN_SIGNAL_CONFIDENCE = 0.75
 
 # Per-strategy confidence minimums (override MIN_SIGNAL_CONFIDENCE)
 STRATEGY_MIN_CONFIDENCE = {
-    "momentum": 0.72,              # Lowered from 0.78 — raw conf 0.30-0.50 + MTF boost needs room
+    "momentum": 0.78,              # T56b (May 13): raised 0.72->0.78 — only top-quality momentum signals
     "mean_reversion": 0.99,              # T55 (May 8): effectively disabled — 24% WR / -$17 lifetime
     "breakout": 0.70,
     "scalper": 0.75,               # High bar — need 3+ confluent signals (RSI extreme + BB + volume + reversal)
