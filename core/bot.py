@@ -186,6 +186,90 @@ class TradingBot:
                 f"@ ${pos_data['entry_price']:.4f} | uPnL: ${pos_data['unrealized_pnl']:.4f}"
             )
 
+        # Reconcile DB ghosts: rows marked 'open' with NO matching exchange
+        # position closed while the bot was down/desynced. They were previously
+        # invisible (never added to portfolio, so the runtime reconciler never
+        # saw them) and sat 'open' forever, corrupting analytics and hiding
+        # realized PnL. This is the bug behind the XRP/BTC ghosts (June 2026).
+        exchange_symbols = {
+            (p["symbol"].split(":")[0] if ":" in p["symbol"] else p["symbol"])
+            for p in positions
+        }
+        for symbol, db_trade in db_trades.items():
+            if symbol in exchange_symbols:
+                continue  # genuinely still open on the exchange (recovered above)
+            try:
+                self._reconcile_ghost_db_trade(symbol, db_trade)
+            except Exception as e:
+                logger.warning(f"Ghost reconcile failed for {symbol} (trade #{db_trade.get('id')}): {e}")
+
+    def _reconcile_ghost_db_trade(self, symbol: str, db_trade: dict):
+        """Close a DB 'open' row whose position no longer exists on the exchange.
+
+        Looks up the actual closing fill on Binance to record accurate PnL;
+        falls back to current price if no fill is found. Defensive — never
+        raises into startup.
+        """
+        import sqlite3
+        from datetime import datetime, timezone
+
+        trade_id = db_trade.get("id")
+        side = db_trade.get("side")
+        entry = float(db_trade.get("price") or 0)
+        qty = float(db_trade.get("quantity") or 0)
+        entry_ts = db_trade.get("timestamp")
+
+        close_price = None
+        close_ts = None
+        pnl = None
+        reason = "ghost_reconciled"
+
+        # Try to recover the real close fill from Binance
+        try:
+            ex = getattr(self.exchange, "_exchange", None)
+            if ex is not None and entry_ts:
+                since = int(datetime.fromisoformat(entry_ts).timestamp() * 1000)
+                fills = ex.fetch_my_trades(symbol, since=since)
+                opp = "sell" if side == "buy" else "buy"
+                closers = [f for f in fills if f.get("side") == opp]
+                if closers:
+                    realized = sum(float(f.get("info", {}).get("realizedPnl", 0)) for f in closers)
+                    close_price = float(closers[-1]["price"])
+                    close_ts = datetime.fromtimestamp(
+                        closers[-1]["timestamp"] / 1000, tz=timezone.utc).isoformat()
+                    pnl = realized
+        except Exception as e:
+            logger.warning(f"Could not fetch close fill for ghost {symbol}: {e}")
+
+        # Fallback: mark closed at current price with computed price-based PnL
+        if close_price is None:
+            try:
+                close_price = self.exchange.get_current_price(symbol)
+                if close_price and entry and qty:
+                    pnl = (close_price - entry) * qty if side == "buy" else (entry - close_price) * qty
+                close_ts = datetime.now(timezone.utc).isoformat()
+                reason = "ghost_reconciled_estimate"
+            except Exception:
+                close_ts = datetime.now(timezone.utc).isoformat()
+
+        try:
+            conn = sqlite3.connect(self.db.db_path)
+            cost = float(db_trade.get("cost") or 0)
+            pnl_pct = (pnl / cost * 100) if (pnl is not None and cost) else None
+            conn.execute(
+                "UPDATE trades SET status='closed', close_price=?, close_timestamp=?, "
+                "pnl=?, pnl_pct=?, close_reason=? WHERE id=? AND status='open'",
+                (close_price, close_ts, pnl, pnl_pct, reason, trade_id),
+            )
+            conn.commit()
+            conn.close()
+            logger.info(
+                f"GHOST RECONCILED {symbol} (trade #{trade_id}): closed @ "
+                f"${close_price} pnl=${pnl if pnl is not None else 'n/a'} reason={reason}"
+            )
+        except Exception as e:
+            logger.warning(f"Ghost DB update failed for {symbol}: {e}")
+
     def _load_open_trades_from_db(self) -> dict:
         """Load open trades from DB (sync, using sqlite3 directly since aiosqlite
         requires async but this runs during sync startup)."""
