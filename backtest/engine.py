@@ -17,8 +17,14 @@ from utils.logger import setup_logger
 logger = setup_logger("backtest_engine")
 
 # Simulation costs
-FEE_RATE = 0.0004          # 0.04% per side (maker/taker on Binance futures)
-SLIPPAGE_RATE = 0.0005     # 0.05% slippage per fill
+FEE_RATE = 0.0004          # 0.04% per side (taker on Binance futures)
+SLIPPAGE_RATE = 0.0005     # 0.05% slippage per limit/trailing fill
+# Honesty fixes (June 2026) — calibrated to live income history:
+#   live commission -$26.87, funding -$9.12, insurance -$3.23 over 226 trades.
+#   The old model (fees+slippage only) predicted +$16 on May while live LOST money.
+STOP_SLIPPAGE_RATE = 0.0012   # 0.12% on stop-market fills — they slip more in fast moves
+                              # (live SLs filled at -0.55% to -0.85% vs a -0.50% stop)
+FUNDING_RATE_PER_8H = 0.00015 # 0.015%/8h on notional — empirical avg from live funding bleed
 
 
 @dataclass
@@ -634,13 +640,16 @@ class BacktestEngine:
         elif reason in ("take_profit", "trailing_stop", "momentum_decay"):
             self.risk_manager.register_win(symbol, bar_index)
 
+        # Stop-market fills slip more than limit/trailing fills (fast-move execution)
+        slip = STOP_SLIPPAGE_RATE if reason in ("stop_loss", "exchange_stop") else SLIPPAGE_RATE
+
         # Apply slippage to exit
         if position.side == "buy":
             # Selling to close long — slippage pushes price down
-            adjusted_exit = exit_price * (1 - SLIPPAGE_RATE)
+            adjusted_exit = exit_price * (1 - slip)
         else:
             # Buying to close short — slippage pushes price up
-            adjusted_exit = exit_price * (1 + SLIPPAGE_RATE)
+            adjusted_exit = exit_price * (1 + slip)
 
         # Calculate P&L
         if position.side == "buy":
@@ -651,6 +660,17 @@ class BacktestEngine:
         # Fees: entry fee already deducted on open, now deduct exit fee
         exit_fee = adjusted_exit * position.quantity * FEE_RATE
         net_pnl = raw_pnl - exit_fee
+
+        # Funding cost: charged per 8h period held, on notional (live bleed -$9.12 not
+        # previously modeled). Approximated from hold duration.
+        try:
+            entry_t = getattr(position, "_entry_time", timestamp)
+            hold_hours = max(0.0, (timestamp - entry_t).total_seconds() / 3600.0)
+            funding_periods = hold_hours / 8.0
+            funding_cost = position.cost * FUNDING_RATE_PER_8H * funding_periods
+            net_pnl -= funding_cost
+        except Exception:
+            pass
 
         # Return margin + PnL to balance
         leverage = getattr(settings, "LEVERAGE", 1)

@@ -129,6 +129,26 @@ class StrategyManager:
         if signal.signal != Signal.HOLD and signal.strategy == "momentum":
             signal = self._apply_choppy_filter(signal, df)
 
+        # Structural edge gate (June 2026 forensic on 225 live trades):
+        # chasing strong trends is a proven loser — momentum entries in
+        # TRENDING_STRONG ran 0% WR (buy) / 27% (sell), -$24 over 18 trades.
+        # The bot's confidence score has near-zero predictive power, so we gate
+        # on market STRUCTURE instead. Config-flagged for A/B validation.
+        if (signal.signal != Signal.HOLD
+                and getattr(settings, "STRUCTURAL_GATE_ENABLED", False)
+                and signal.strategy == "momentum"
+                and regime == MarketRegime.TRENDING_STRONG):
+            logger.info(
+                f"STRUCTURAL GATE: blocked momentum {signal.signal.value} {symbol} "
+                f"in TRENDING_STRONG (chase-the-trend loser)"
+            )
+            signal = TradeSignal(
+                signal=Signal.HOLD, confidence=0.0, strategy=signal.strategy,
+                symbol=symbol, entry_price=signal.entry_price,
+                stop_loss=0, take_profit=0,
+                reason="Structural gate: no momentum chase in strong trend",
+            )
+
         # Save pre-filter state for dashboard visibility
         pre_filter_signal = signal.signal.value if signal.signal != Signal.HOLD else None
         pre_filter_conf = signal.confidence if signal.signal != Signal.HOLD else None

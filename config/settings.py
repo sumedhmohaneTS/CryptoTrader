@@ -51,6 +51,21 @@ STRATEGY_REWARD_RISK_RATIO = {
 }
 MIN_SL_DISTANCE_PCT = 0.020      # Reject signals with SL < 2.0% from entry (1.5% got clipped by noise at 25x)
 
+# Structural edge gate (T57, June 2026) — forensic on 225 live trades found the
+# bot's confidence score has ~zero predictive power (WR flat 29-42% across all
+# confidence buckets, every bucket -EV). The ONE robust loser pattern: momentum
+# entries that CHASE strong trends (TRENDING_STRONG: buy 0% WR, sell 27%, -$24/18
+# trades). When enabled, blocks momentum entries in TRENDING_STRONG.
+# Backtestable — validate via backtest/validate.py --gate before deploying live.
+STRUCTURAL_GATE_ENABLED = False
+
+# Funding filter (T57) — forensic found extreme funding (|z|>1, crowded positioning)
+# ran 57% WR vs 31% at neutral funding. LIVE-ONLY: the backtest has no historical
+# funding data (engine passes funding_rate=None), so this CANNOT be validated by
+# backtest. Test in paper/observation mode before risking real capital.
+FUNDING_FILTER_ENABLED = False
+FUNDING_FILTER_MIN_ABS_Z = 1.0     # require |funding_zscore| >= this to enter
+
 # Choppy market filter — penalize momentum when ATR is elevated without strong direction
 CHOPPY_FILTER_ENABLED = True
 CHOPPY_ATR_RATIO_THRESHOLD = 1.15   # ATR/ATR_SMA > 1.15 = elevated volatility
