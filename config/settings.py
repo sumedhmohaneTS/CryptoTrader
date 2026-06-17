@@ -12,7 +12,9 @@ CRYPTOPANIC_API_KEY = os.getenv("CRYPTOPANIC_API_KEY", "")
 
 # Futures config
 TRADING_TYPE = "future"          # "spot" or "future"
-LEVERAGE = 25                    # 25x leverage — targeting 50% return
+LEVERAGE = 5                     # T58 (Jun 17): 25x->5x. Forensic verdict: no proven edge,
+                                 # 25x worst-month DD ~32% (47% after slippage) breached the 35%
+                                 # breaker and caused a live liquidation. Micro-live survival mode.
 MARGIN_TYPE = "ISOLATED"         # ISOLATED — caps loss per position
 
 # Trading pairs (USDT-M futures contracts) — dropped ETH & 1000PEPE (net losers)
@@ -32,7 +34,8 @@ PRIMARY_TIMEFRAME = "15m"
 BOT_LOOP_INTERVAL_SECONDS = 60   # Check every 60s on 15m timeframe
 
 # Risk management
-MAX_POSITION_PCT = 0.15          # 15% of portfolio per trade
+MAX_POSITION_PCT = 0.05          # T58: 15%->5% margin/trade. At 5x ~= $20 notional on $83,
+                                 # ~$0.40 risk/trade — account survives 100+ losses. Micro-size.
 STOP_LOSS_ATR_MULTIPLIER = 1.5   # 1.5x ATR stop — proven optimal
 REWARD_RISK_RATIO = 2.0          # Fixed 2:1 R:R (hybrid trailing extends beyond this)
 
@@ -79,7 +82,7 @@ SURGE_ADX_THRESHOLD = 30            # ADX >= 30 = strong directional trend
 SURGE_ROC3_THRESHOLD = 1.0          # |3-bar ROC| >= 1% = price accelerating
 SURGE_CONFIDENCE_BOOST = 0.15       # +0.15 confidence boost (pushes 0.55+ into tradeable range)
 
-DAILY_LOSS_LIMIT_PCT = 0.12      # Stop trading if down 12% in a day
+DAILY_LOSS_LIMIT_PCT = 0.06      # T58: 12%->6% — tighter halt; 43% of losers die <3h (noise)
 MAX_DRAWDOWN_PCT = 0.35          # Circuit breaker at 35% drawdown from peak
 MAX_OPEN_POSITIONS = 5           # Allow 5 concurrent positions
 
@@ -98,8 +101,8 @@ STAIRCASE_CLOSE_PCT = 0.50         # Unused while staircase disabled
 # Dynamic risk controls
 COOLDOWN_BARS = 5                # Wait 5 bars after stop-loss
 MAX_CONSECUTIVE_LOSSES = 2       # After 2 consecutive losses, double cooldown
-MAX_TRADES_PER_HOUR = 3          # Increased for 9 pairs
-MAX_TRADES_PER_DAY = 18          # Increased for 9 pairs
+MAX_TRADES_PER_HOUR = 2          # T58: 3->2 — throttle low-quality entries (less fee/funding churn)
+MAX_TRADES_PER_DAY = 6           # T58: 18->6 — fewer marginal trades; cost drag was 28% of losses
 MAX_SAME_DIRECTION_POSITIONS = 2 # Allow 2 concurrent longs or shorts (1 missed rallies, 3 caused correlated blowups)
 VOLATILE_REGIME_SIZING = 0.67    # Scale position size to 67% in volatile markets
 
