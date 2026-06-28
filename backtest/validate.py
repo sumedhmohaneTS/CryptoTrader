@@ -116,12 +116,23 @@ def main():
                     help="Multiply all cost rates by this factor (robustness test)")
     ap.add_argument("--gate", action="store_true",
                     help="Enable STRUCTURAL_GATE (T57 treatment) for this run")
+    ap.add_argument("--leverage", type=float, default=None, help="Override LEVERAGE")
+    ap.add_argument("--position-pct", type=float, default=None, help="Override MAX_POSITION_PCT")
+    ap.add_argument("--mr-floor", type=float, default=None,
+                    help="Override mean_reversion confidence floor (0.99=off, 0.62=on)")
     args = ap.parse_args()
 
-    # Treatment toggle: structural edge gate
+    # Per-run overrides so we can A/B without touching the live settings.py
     from config import settings as _settings
     _settings.STRUCTURAL_GATE_ENABLED = bool(args.gate)
-    print(f"  STRUCTURAL_GATE_ENABLED = {_settings.STRUCTURAL_GATE_ENABLED}")
+    if args.leverage is not None:
+        _settings.LEVERAGE = args.leverage
+    if args.position_pct is not None:
+        _settings.MAX_POSITION_PCT = args.position_pct
+    if args.mr_floor is not None:
+        _settings.STRATEGY_MIN_CONFIDENCE["mean_reversion"] = args.mr_floor
+    print(f"  GATE={_settings.STRUCTURAL_GATE_ENABLED} LEV={_settings.LEVERAGE} "
+          f"POS={_settings.MAX_POSITION_PCT} MR_FLOOR={_settings.STRATEGY_MIN_CONFIDENCE.get('mean_reversion')}")
 
     # Apply cost stress
     if args.cost_stress != 1.0:

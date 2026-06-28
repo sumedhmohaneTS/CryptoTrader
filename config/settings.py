@@ -138,7 +138,9 @@ MIN_SIGNAL_CONFIDENCE = 0.75
 # Per-strategy confidence minimums (override MIN_SIGNAL_CONFIDENCE)
 STRATEGY_MIN_CONFIDENCE = {
     "momentum": 0.78,              # T56b (May 13): raised 0.72->0.78 — only top-quality momentum signals
-    "mean_reversion": 0.99,              # T55 (May 8): effectively disabled — 24% WR / -$17 lifetime
+    "mean_reversion": 0.62,              # T59 (Jun 28): RE-ENABLED. Fade A/B (8mo, honest costs) — fade
+                                         # cut bleed-month losses -$33->-$9 and lifted ex-jackpot EV from
+                                         # +$0.02 (≈0) to +$0.13/trade. The only structurally real edge found.
     "breakout": 0.70,
     "scalper": 0.75,               # High bar — need 3+ confluent signals (RSI extreme + BB + volume + reversal)
 }
